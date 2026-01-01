@@ -315,7 +315,6 @@ class TranscriptHandler(SimpleHTTPRequestHandler):
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', len(body))
-        self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(body)
 
@@ -389,7 +388,7 @@ class TranscriptHandler(SimpleHTTPRequestHandler):
             self.send_header('Content-Type', 'text/markdown; charset=utf-8')
             self.send_header('Content-Length', len(body))
             self.send_header('Content-Disposition', f'attachment; filename="{filename}"')
-            self.send_header('Access-Control-Allow-Origin', '*')
+
             self.end_headers()
             self.wfile.write(body)
         except Exception as e:
