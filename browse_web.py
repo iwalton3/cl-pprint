@@ -289,12 +289,14 @@ class TranscriptHandler(SimpleHTTPRequestHandler):
             session_id = path.split('/')[-1]
             show_tools = query.get('show_tools', ['0'])[0] == '1'
             show_thinking = query.get('show_thinking', ['0'])[0] == '1'
-            self.handle_get_transcript(session_id, show_tools, show_thinking)
+            truncate_tools = query.get('truncate_tools', ['1'])[0] == '1'
+            self.handle_get_transcript(session_id, show_tools, show_thinking, truncate_tools)
         elif path.startswith('/api/download/'):
             session_id = path.split('/')[-1]
             show_tools = query.get('show_tools', ['0'])[0] == '1'
             show_thinking = query.get('show_thinking', ['0'])[0] == '1'
-            self.handle_download(session_id, show_tools, show_thinking)
+            truncate_tools = query.get('truncate_tools', ['1'])[0] == '1'
+            self.handle_download(session_id, show_tools, show_thinking, truncate_tools)
         elif path == '/' or path == '/index.html':
             # Serve index.html
             self.path = '/index.html'
@@ -328,7 +330,7 @@ class TranscriptHandler(SimpleHTTPRequestHandler):
         }
         self.send_json(data)
 
-    def handle_get_transcript(self, session_id: str, show_tools: bool, show_thinking: bool):
+    def handle_get_transcript(self, session_id: str, show_tools: bool, show_thinking: bool, truncate_tools: bool = True):
         """GET /api/transcript/<id> - Get formatted transcript content."""
         transcript = _transcripts_by_id.get(session_id)
         if not transcript:
@@ -344,7 +346,8 @@ class TranscriptHandler(SimpleHTTPRequestHandler):
                 show_timestamps=True,
                 show_status=False,
                 title=transcript.filename,
-                description=transcript.summary
+                description=transcript.summary,
+                truncate_tools=truncate_tools
             )
 
             self.send_json({
@@ -356,7 +359,7 @@ class TranscriptHandler(SimpleHTTPRequestHandler):
         except Exception as e:
             self.send_error_json(f'Error formatting transcript: {e}', 500)
 
-    def handle_download(self, session_id: str, show_tools: bool, show_thinking: bool):
+    def handle_download(self, session_id: str, show_tools: bool, show_thinking: bool, truncate_tools: bool = True):
         """GET /api/download/<id> - Download transcript as markdown file."""
         transcript = _transcripts_by_id.get(session_id)
         if not transcript:
@@ -372,7 +375,8 @@ class TranscriptHandler(SimpleHTTPRequestHandler):
                 show_timestamps=True,
                 show_status=False,
                 title=transcript.filename,
-                description=transcript.summary
+                description=transcript.summary,
+                truncate_tools=truncate_tools
             )
 
             # Generate filename: YYYYMMDD_[ai-filename].md

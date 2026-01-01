@@ -3,13 +3,14 @@ import { createStore } from '../lib/framework.js';
 const STORAGE_KEY = 'claude-transcript-settings';
 
 // Load saved settings
-let savedSettings = { showTools: false, showThinking: false };
+let savedSettings = { showTools: false, showThinking: false, truncateTools: true };
 try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
         const parsed = JSON.parse(saved);
         if (typeof parsed.showTools === 'boolean') savedSettings.showTools = parsed.showTools;
         if (typeof parsed.showThinking === 'boolean') savedSettings.showThinking = parsed.showThinking;
+        if (typeof parsed.truncateTools === 'boolean') savedSettings.truncateTools = parsed.truncateTools;
     }
 } catch (e) {}
 
@@ -21,24 +22,31 @@ const downloadedItems = new Set();
 export const appStore = createStore({
     showTools: savedSettings.showTools,
     showThinking: savedSettings.showThinking,
+    truncateTools: savedSettings.truncateTools,
 });
 
 function saveToStorage() {
     try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify({
-            showTools: appStore.showTools,
-            showThinking: appStore.showThinking,
+            showTools: appStore.state.showTools,
+            showThinking: appStore.state.showThinking,
+            truncateTools: appStore.state.truncateTools,
         }));
     } catch (e) {}
 }
 
 export function setShowTools(value) {
-    appStore.showTools = value;
+    appStore.state.showTools = value;
     saveToStorage();
 }
 
 export function setShowThinking(value) {
-    appStore.showThinking = value;
+    appStore.state.showThinking = value;
+    saveToStorage();
+}
+
+export function setTruncateTools(value) {
+    appStore.state.truncateTools = value;
     saveToStorage();
 }
 

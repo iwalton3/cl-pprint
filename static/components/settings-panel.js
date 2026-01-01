@@ -1,5 +1,5 @@
 import { defineComponent, html, when } from '../lib/framework.js';
-import { appStore, setShowTools, setShowThinking } from '../stores/app-store.js';
+import { appStore, setShowTools, setShowThinking, setTruncateTools } from '../stores/app-store.js';
 
 export default defineComponent('settings-panel', {
     stores: { app: appStore },
@@ -23,6 +23,12 @@ export default defineComponent('settings-panel', {
         handleThinkingChange(e) {
             e.stopPropagation();
             setShowThinking(e.target.checked);
+            window.dispatchEvent(new CustomEvent('settings-changed'));
+        },
+
+        handleTruncateChange(e) {
+            e.stopPropagation();
+            setTruncateTools(e.target.checked);
             window.dispatchEvent(new CustomEvent('settings-changed'));
         },
 
@@ -54,15 +60,21 @@ export default defineComponent('settings-panel', {
                     <div class="settings-dropdown" on-click="handleDropdownClick">
                         <label>
                             <input type="checkbox"
-                                   .checked="${this.stores.app.showTools}"
+                                   checked="${this.stores.app.showTools}"
                                    on-change="${this.handleToolsChange}">
                             Show Tool Calls
                         </label>
                         <label>
                             <input type="checkbox"
-                                   .checked="${this.stores.app.showThinking}"
+                                   checked="${this.stores.app.showThinking}"
                                    on-change="${this.handleThinkingChange}">
                             Show Thinking Blocks
+                        </label>
+                        <label>
+                            <input type="checkbox"
+                                   checked="${this.stores.app.truncateTools}"
+                                   on-change="${this.handleTruncateChange}">
+                            Truncate Tool Output
                         </label>
                     </div>
                 `)}

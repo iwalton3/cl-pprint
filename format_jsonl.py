@@ -42,8 +42,8 @@ def format_timestamp(ts_str):
         return ts_str
 
 
-def extract_answer_text(content):
-    """Extract answer text from tool_result content."""
+def extract_text_content(content):
+    """Extract text from tool_result/message content which may be string or list of blocks."""
     if isinstance(content, str):
         return content
     elif isinstance(content, list):
@@ -53,6 +53,11 @@ def extract_answer_text(content):
                 texts.append(item.get('text', ''))
         return '\n'.join(texts) if texts else str(content)
     return str(content)
+
+
+def extract_answer_text(content):
+    """Extract answer text from tool_result content."""
+    return extract_text_content(content)
 
 
 def parse_user_command(text):
@@ -576,12 +581,136 @@ def parse_entries(input_path):
     return entries, ask_user_questions, ask_user_answers, exit_plan_modes
 
 
+def truncate_text(text, max_len=500):
+    """Truncate text with indication of total length."""
+    if not text or len(text) <= max_len:
+        return text
+    return text[:max_len] + f"\n... [{len(text)} chars total, truncated]"
+
+
+def format_tool_input(tool_name, tool_input):
+    """Format tool input in a concise, readable way."""
+    if not tool_input:
+        return "(no input)"
+
+    # Handle specific tools with cleaner formatting
+    if tool_name == 'Write':
+        file_path = tool_input.get('file_path', 'unknown')
+        content = tool_input.get('content', '')
+        return f"**File:** `{file_path}`\n```\n{truncate_text(content, 300)}\n```"
+
+    elif tool_name == 'Edit':
+        file_path = tool_input.get('file_path', 'unknown')
+        old_string = tool_input.get('old_string', '')
+        new_string = tool_input.get('new_string', '')
+        result = f"**File:** `{file_path}`\n"
+        result += f"**Old:**\n```\n{truncate_text(old_string, 200)}\n```\n"
+        result += f"**New:**\n```\n{truncate_text(new_string, 200)}\n```"
+        return result
+
+    elif tool_name == 'Read':
+        file_path = tool_input.get('file_path', 'unknown')
+        offset = tool_input.get('offset')
+        limit = tool_input.get('limit')
+        result = f"**File:** `{file_path}`"
+        if offset or limit:
+            result += f" (offset: {offset}, limit: {limit})"
+        return result
+
+    elif tool_name == 'Bash':
+        command = tool_input.get('command', '')
+        desc = tool_input.get('description', '')
+        result = ""
+        if desc:
+            result += f"**Description:** {desc}\n"
+        result += f"```bash\n{truncate_text(command, 500)}\n```"
+        return result
+
+    elif tool_name == 'Grep':
+        pattern = tool_input.get('pattern', '')
+        path = tool_input.get('path', '.')
+        return f"**Pattern:** `{pattern}` in `{path}`"
+
+    elif tool_name == 'Glob':
+        pattern = tool_input.get('pattern', '')
+        path = tool_input.get('path', '.')
+        return f"**Pattern:** `{pattern}` in `{path}`"
+
+    elif tool_name == 'Task':
+        desc = tool_input.get('description', '')
+        prompt = tool_input.get('prompt', '')
+        subagent = tool_input.get('subagent_type', '')
+        result = f"**Type:** {subagent}  \n**Description:** {desc}"
+        if prompt:
+            result += f"  \n**Prompt:**\n> {truncate_text(prompt, 300)}"
+        return result
+
+    elif tool_name == 'TodoWrite':
+        todos = tool_input.get('todos', [])
+        if todos:
+            items = [f"- [{t.get('status', '?')}] {t.get('content', '')}" for t in todos[:10]]
+            result = "\n".join(items)
+            if len(todos) > 10:
+                result += f"\n... and {len(todos) - 10} more"
+            return result
+        return "(empty todo list)"
+
+    else:
+        # Generic: show truncated JSON
+        try:
+            json_str = json.dumps(tool_input, indent=2)
+            return f"```json\n{truncate_text(json_str, 500)}\n```"
+        except:
+            return truncate_text(str(tool_input), 500)
+
+
+def format_tool_result(tool_name, result_content, is_error=False, truncate=True):
+    """Format tool result in a readable way."""
+    # Extract actual text from content blocks
+    text = extract_text_content(result_content)
+
+    # Apply truncation if enabled
+    def maybe_truncate(t, max_len=1000):
+        return truncate_text(t, max_len) if truncate else t
+
+    if is_error:
+        return f"```\n{maybe_truncate(text)}\n```"
+
+    # Task/agent results should be rendered as markdown (they contain analysis/summaries)
+    if tool_name == 'Task':
+        # Agent results are often markdown-formatted already
+        output_text = maybe_truncate(text)
+        # Indent as blockquote for visual separation
+        lines = output_text.split('\n')
+        return '\n'.join(f"> {line}" for line in lines)
+
+    # File reading results - show as code
+    if tool_name in ('Read', 'Bash', 'Grep', 'Glob'):
+        return f"```\n{maybe_truncate(text)}\n```"
+
+    # Default: show as preformatted if it looks like code/output, else as text
+    if '\n' in text or text.startswith('{') or text.startswith('['):
+        return f"```\n{maybe_truncate(text)}\n```"
+    else:
+        return maybe_truncate(text)
+
+
 def extract_message_content(entry, show_tools=False, show_thinking=False,
                             ask_user_questions=None, ask_user_answers=None,
-                            exit_plan_modes=None):
-    """Extract content parts from an entry. Returns (content_parts, is_brief, has_plan_result)."""
+                            exit_plan_modes=None, tool_id_to_name=None,
+                            truncate_tools=True):
+    """Extract content parts from an entry. Returns (content_parts, is_brief, has_plan_result, content_type).
+
+    tool_id_to_name: Dict that maps tool_use IDs to tool names. Passed in to track across messages.
+                     Gets updated when tool_use items are encountered.
+    truncate_tools: If True, truncate tool inputs/outputs. If False, show full content.
+    content_type: 'text', 'tool_call', 'tool_result', or 'mixed' - indicates primary content type
+    """
+    if tool_id_to_name is None:
+        tool_id_to_name = {}
+
     if '_error' in entry:
-        return [f"[ERROR] {entry['_error']}"], False, False
+        return [f"[ERROR] {entry['_error']}"], False, False, 'text'
 
     msg = entry.get('message', {})
     content = msg.get('content', '')
@@ -589,26 +718,30 @@ def extract_message_content(entry, show_tools=False, show_thinking=False,
     content_parts = []
     shown_tool_results = set()
     has_plan_result = False
+    has_text = False
+    has_tool_use = False
+    has_tool_result = False
 
     if isinstance(content, str):
         if content.strip():
             if is_caveat_message(content):
-                return [], False, False
+                return [], False, False, 'text'
             if is_compaction_message(content):
-                return ["__COMPACTION__"], False, False
+                return ["__COMPACTION__"], False, False, 'text'
             if '<command-name>' in content:
                 cmd_formatted, should_filter = parse_user_command(content)
                 if should_filter:
-                    return [], False, False
+                    return [], False, False, 'text'
                 if cmd_formatted:
                     content_parts.append(cmd_formatted)
+                    has_text = True
             elif '<local-command-stdout>' in content:
-                return [], False, False
+                return [], False, False, 'text'
             else:
                 content_parts.append(content)
+                has_text = True
 
-    # Track if message has tool uses (text before tool = precedes_tool)
-    has_tool_use = False
+    # Pre-check if message has tool uses (for precedes_tool logic)
     if isinstance(content, list):
         has_tool_use = any(
             isinstance(item, dict) and item.get('type') == 'tool_use'
@@ -632,11 +765,14 @@ def extract_message_content(entry, show_tools=False, show_thinking=False,
                         content_parts.append("__COMPACTION__")
                         continue
                     content_parts.append(text)
+                    has_text = True
 
             elif item_type == 'tool_use':
                 tool_name = item.get('name', 'unknown')
                 tool_input = item.get('input', {})
                 tool_id = item.get('id', '')
+                # Track tool name for result formatting
+                tool_id_to_name[tool_id] = tool_name
 
                 if tool_name == 'AskUserQuestion':
                     answer = ask_user_answers.get(tool_id) if ask_user_answers else None
@@ -648,14 +784,13 @@ def extract_message_content(entry, show_tools=False, show_thinking=False,
                     content_parts.append("\n📋 **Submitting plan for approval...**")
                 elif show_tools:
                     content_parts.append(f"\n📦 **Tool: {tool_name}**")
-                    content_parts.append("```json")
-                    content_parts.append(json.dumps(tool_input, indent=2))
-                    content_parts.append("```")
+                    content_parts.append(format_tool_input(tool_name, tool_input))
 
             elif item_type == 'tool_result':
                 tool_id = item.get('tool_use_id', '')
                 is_error = item.get('is_error', False)
                 result_content = item.get('content', '')
+                has_tool_result = True
 
                 if tool_id in shown_tool_results:
                     continue
@@ -673,15 +808,10 @@ def extract_message_content(entry, show_tools=False, show_thinking=False,
                     ))
                     has_plan_result = True
                 elif show_tools:
+                    tool_name = tool_id_to_name.get(tool_id, 'unknown')
                     status = "❌ Error" if is_error else "✅ Result"
-                    content_parts.append(f"\n{status} (tool: {tool_id[:8]}...):")
-                    if isinstance(result_content, str):
-                        if len(result_content) > 2000:
-                            content_parts.append(result_content[:2000] + f"\n... [{len(result_content)} chars total]")
-                        else:
-                            content_parts.append(result_content)
-                    else:
-                        content_parts.append(str(result_content)[:2000])
+                    content_parts.append(f"\n{status} ({tool_name}):\n")
+                    content_parts.append(format_tool_result(tool_name, result_content, is_error, truncate=truncate_tools))
 
             elif item_type == 'thinking':
                 if show_thinking:
@@ -694,11 +824,22 @@ def extract_message_content(entry, show_tools=False, show_thinking=False,
     full_text = '\n'.join(content_parts)
     is_brief = is_brief_message(full_text, precedes_tool=has_tool_use) and not has_plan_result
 
-    return content_parts, is_brief, has_plan_result
+    # Determine content type for header selection
+    if has_text and not has_tool_use and not has_tool_result:
+        content_type = 'text'
+    elif has_tool_use and not has_text:
+        content_type = 'tool_call'
+    elif has_tool_result and not has_text:
+        content_type = 'tool_result'
+    else:
+        content_type = 'mixed'
+
+    return content_parts, is_brief, has_plan_result, content_type
 
 
 def format_jsonl(input_path, output_path=None, show_tools=False, show_thinking=False,
-                 show_timestamps=True, show_status=False, title=None, description=None):
+                 show_timestamps=True, show_status=False, title=None, description=None,
+                 truncate_tools=True):
     """Format entire JSONL file.
 
     Args:
@@ -710,6 +851,7 @@ def format_jsonl(input_path, output_path=None, show_tools=False, show_thinking=F
         show_status: Include brief status messages
         title: Custom title for the document (default: "Claude Agent Conversation Log")
         description: Description to show below title as blockquote
+        truncate_tools: Truncate tool inputs/outputs (default True)
     """
     output_lines = []
 
@@ -755,6 +897,7 @@ def format_jsonl(input_path, output_path=None, show_tools=False, show_thinking=F
     user_msg_index = 0
     plan_index_counter = 0
     user_has_plan = set()  # Track which user messages have plan results
+    tool_id_to_name = {}  # Track tool_id -> tool_name across all messages
     while i < len(entries):
         entry = entries[i]
         entry_type = entry.get('type', 'unknown')
@@ -762,9 +905,10 @@ def format_jsonl(input_path, output_path=None, show_tools=False, show_thinking=F
         role = msg.get('role', entry_type)
         timestamp = format_timestamp(entry.get('timestamp'))
 
-        content_parts, is_brief, has_plan = extract_message_content(
+        content_parts, is_brief, has_plan, content_type = extract_message_content(
             entry, show_tools, show_thinking,
-            ask_user_questions, ask_user_answers, exit_plan_modes
+            ask_user_questions, ask_user_answers, exit_plan_modes, tool_id_to_name,
+            truncate_tools
         )
 
         if not content_parts:
@@ -791,9 +935,10 @@ def format_jsonl(input_path, output_path=None, show_tools=False, show_thinking=F
 
                 # Skip non-assistant entries that have no displayable content
                 if next_role != 'assistant':
-                    next_parts, _, _ = extract_message_content(
+                    next_parts, _, _, _ = extract_message_content(
                         next_entry, show_tools, show_thinking,
-                        ask_user_questions, ask_user_answers, exit_plan_modes
+                        ask_user_questions, ask_user_answers, exit_plan_modes, tool_id_to_name,
+                        truncate_tools
                     )
                     if not next_parts:
                         # Empty entry (tool results, queue-operation, etc.) - skip
@@ -803,9 +948,10 @@ def format_jsonl(input_path, output_path=None, show_tools=False, show_thinking=F
                         # Has actual content - stop batching
                         break
 
-                next_parts, next_brief, next_has_plan = extract_message_content(
+                next_parts, next_brief, next_has_plan, _ = extract_message_content(
                     next_entry, show_tools, show_thinking,
-                    ask_user_questions, ask_user_answers, exit_plan_modes
+                    ask_user_questions, ask_user_answers, exit_plan_modes, tool_id_to_name,
+                    truncate_tools
                 )
 
                 if not next_parts:
@@ -832,16 +978,24 @@ def format_jsonl(input_path, output_path=None, show_tools=False, show_thinking=F
                 i = j
                 continue
 
-        # Regular output
-        role_display = "🧑 USER" if role == 'user' else "🤖 Claude"
+        # Regular output - determine header based on content type
+        if show_tools and content_type == 'tool_call':
+            role_display = "📦 Tool Call"
+        elif show_tools and content_type == 'tool_result':
+            role_display = "📦 Tool Result"
+        elif role == 'user':
+            role_display = "🧑 USER"
+        else:
+            role_display = "🤖 Claude"
+
         output_lines.append(f"## {role_display}")
         if show_timestamps and timestamp:
             output_lines.append(f"*{timestamp}*\n")
         else:
             output_lines.append("")
 
-        # Add unique identifier to headers for navigation
-        if role == 'user':
+        # Add unique identifier to headers for navigation (only for user text messages)
+        if role == 'user' and content_type != 'tool_result':
             # Check if this user message has a plan result
             has_plan = any('Plan Approved' in p or 'Plan Rejected' in p for p in content_parts)
             output_lines[-2] = f"## 🧑 USER #{user_msg_index}"  # Replace header with numbered version
@@ -1004,6 +1158,8 @@ Examples:
                         help='Show status messages like "Let me X" (hidden by default)')
     parser.add_argument('--exclude-timestamps', action='store_true',
                         help='Hide timestamps from output')
+    parser.add_argument('--no-truncate-tools', action='store_true',
+                        help='Show full tool inputs/outputs without truncation')
 
     args = parser.parse_args()
 
@@ -1013,7 +1169,8 @@ Examples:
         show_tools=args.show_tools,
         show_thinking=args.show_thinking,
         show_timestamps=not args.exclude_timestamps,
-        show_status=args.show_status
+        show_status=args.show_status,
+        truncate_tools=not args.no_truncate_tools
     )
 
 

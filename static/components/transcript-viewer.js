@@ -48,7 +48,8 @@ export default defineComponent('transcript-viewer', {
 
             const showTools = this.stores.app.showTools ? '1' : '0';
             const showThinking = this.stores.app.showThinking ? '1' : '0';
-            const url = `/api/transcript/${sessionId}?show_tools=${showTools}&show_thinking=${showThinking}`;
+            const truncateTools = this.stores.app.truncateTools ? '1' : '0';
+            const url = `/api/transcript/${sessionId}?show_tools=${showTools}&show_thinking=${showThinking}&truncate_tools=${truncateTools}`;
 
             try {
                 const res = await fetch(url);
@@ -138,7 +139,8 @@ export default defineComponent('transcript-viewer', {
 
             const showTools = this.stores.app.showTools ? '1' : '0';
             const showThinking = this.stores.app.showThinking ? '1' : '0';
-            const url = `/api/download/${sessionId}?show_tools=${showTools}&show_thinking=${showThinking}`;
+            const truncateTools = this.stores.app.truncateTools ? '1' : '0';
+            const url = `/api/download/${sessionId}?show_tools=${showTools}&show_thinking=${showThinking}&truncate_tools=${truncateTools}`;
 
             window.location.href = url;
         }
