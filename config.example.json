@@ -1,0 +1,18 @@
+{
+  "ollama": {
+    "model": "qwen3:30b-a3b-thinking-2507-q4_K_M",
+    "url": "http://localhost:11434/api/generate",
+    "timeout": 120,
+    "temperature": 0.3,
+    "max_tokens": 150
+  },
+  "paths": {
+    "claude_projects": "~/.claude/projects",
+    "summary_cache": "~/.claude/transcript_summaries.json",
+    "export_dir": "./exports"
+  },
+  "project_name_skip_dirs": [
+    "home", "working", "Users", "Desktop", "Documents",
+    "source", "src", "projects", "repos"
+  ]
+}
