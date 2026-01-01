@@ -4,10 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-This is a toolkit for processing Claude Code agent JSONL logs. It provides three main utilities:
+This is a toolkit for processing Claude Code agent JSONL logs. It provides four main utilities:
 - **format_jsonl.py** - Converts JSONL logs to readable markdown
 - **summarize_transcripts.py** - Generates AI summaries using local Ollama
 - **browse_transcripts.py** - Interactive TUI for browsing and exporting transcripts
+- **browse_web.py** - Web-based browser with SPA interface
+
+## Web Framework
+
+The web browser (`browse_web.py` + `static/`) uses the VDX framework. See [FRAMEWORK.md](FRAMEWORK.md) for patterns and usage.
 
 ## Commands
 
@@ -24,6 +29,11 @@ python summarize_transcripts.py [--dir ~/.claude/projects] [--force] [--dry-run]
 Launch the interactive browser:
 ```bash
 python browse_transcripts.py [--dir ~/.claude/projects]
+```
+
+Launch the web browser (opens in default browser):
+```bash
+python browse_web.py [--port 8080] [--no-browser]
 ```
 
 ## Dependencies
