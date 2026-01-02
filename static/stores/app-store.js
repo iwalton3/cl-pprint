@@ -2,15 +2,30 @@ import { createStore } from '../lib/framework.js';
 
 const STORAGE_KEY = 'claude-transcript-settings';
 
+// Default settings
+const defaultSettings = {
+    showTools: false,
+    showThinking: false,
+    truncateToolCalls: true,
+    truncateToolResults: true,
+    excludeEditTools: false,
+    excludeViewTools: false,
+    showExploreFull: false,
+    showSubagentsFull: false,
+};
+
 // Load saved settings
-let savedSettings = { showTools: false, showThinking: false, truncateTools: true };
+let savedSettings = { ...defaultSettings };
 try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
         const parsed = JSON.parse(saved);
-        if (typeof parsed.showTools === 'boolean') savedSettings.showTools = parsed.showTools;
-        if (typeof parsed.showThinking === 'boolean') savedSettings.showThinking = parsed.showThinking;
-        if (typeof parsed.truncateTools === 'boolean') savedSettings.truncateTools = parsed.truncateTools;
+        // Only use saved values for known keys
+        for (const key of Object.keys(defaultSettings)) {
+            if (typeof parsed[key] === 'boolean') {
+                savedSettings[key] = parsed[key];
+            }
+        }
     }
 } catch (e) {}
 
@@ -19,36 +34,33 @@ const viewedItems = new Set();
 const downloadedItems = new Set();
 
 // Create the store with settings
-export const appStore = createStore({
-    showTools: savedSettings.showTools,
-    showThinking: savedSettings.showThinking,
-    truncateTools: savedSettings.truncateTools,
-});
+export const appStore = createStore({ ...savedSettings });
 
 function saveToStorage() {
     try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({
-            showTools: appStore.state.showTools,
-            showThinking: appStore.state.showThinking,
-            truncateTools: appStore.state.truncateTools,
-        }));
+        const toSave = {};
+        for (const key of Object.keys(defaultSettings)) {
+            toSave[key] = appStore.state[key];
+        }
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
     } catch (e) {}
 }
 
-export function setShowTools(value) {
-    appStore.state.showTools = value;
+// Generic setter for any setting
+export function setSetting(key, value) {
+    appStore.state[key] = value;
     saveToStorage();
 }
 
-export function setShowThinking(value) {
-    appStore.state.showThinking = value;
-    saveToStorage();
-}
-
-export function setTruncateTools(value) {
-    appStore.state.truncateTools = value;
-    saveToStorage();
-}
+// Convenience setters
+export function setShowTools(value) { setSetting('showTools', value); }
+export function setShowThinking(value) { setSetting('showThinking', value); }
+export function setTruncateToolCalls(value) { setSetting('truncateToolCalls', value); }
+export function setTruncateToolResults(value) { setSetting('truncateToolResults', value); }
+export function setExcludeEditTools(value) { setSetting('excludeEditTools', value); }
+export function setExcludeViewTools(value) { setSetting('excludeViewTools', value); }
+export function setShowExploreFull(value) { setSetting('showExploreFull', value); }
+export function setShowSubagentsFull(value) { setSetting('showSubagentsFull', value); }
 
 export function markViewed(sessionId) {
     viewedItems.add(sessionId);
@@ -60,4 +72,18 @@ export function markDownloaded(sessionId) {
 
 export function isViewed(sessionId) {
     return viewedItems.has(sessionId) || downloadedItems.has(sessionId);
+}
+
+// Build query string for API calls
+export function buildQueryString() {
+    const params = new URLSearchParams();
+    params.set('show_tools', appStore.state.showTools ? '1' : '0');
+    params.set('show_thinking', appStore.state.showThinking ? '1' : '0');
+    params.set('truncate_tool_calls', appStore.state.truncateToolCalls ? '1' : '0');
+    params.set('truncate_tool_results', appStore.state.truncateToolResults ? '1' : '0');
+    params.set('exclude_edit_tools', appStore.state.excludeEditTools ? '1' : '0');
+    params.set('exclude_view_tools', appStore.state.excludeViewTools ? '1' : '0');
+    params.set('show_explore_full', appStore.state.showExploreFull ? '1' : '0');
+    params.set('show_subagents_full', appStore.state.showSubagentsFull ? '1' : '0');
+    return params.toString();
 }

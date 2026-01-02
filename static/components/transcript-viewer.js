@@ -1,5 +1,5 @@
 import { defineComponent, html, when } from '../lib/framework.js';
-import { appStore, markViewed, markDownloaded } from '../stores/app-store.js';
+import { appStore, markViewed, markDownloaded, buildQueryString } from '../stores/app-store.js';
 
 export default defineComponent('transcript-viewer', {
     props: {
@@ -46,10 +46,7 @@ export default defineComponent('transcript-viewer', {
             // Mark as viewed
             markViewed(sessionId);
 
-            const showTools = this.stores.app.showTools ? '1' : '0';
-            const showThinking = this.stores.app.showThinking ? '1' : '0';
-            const truncateTools = this.stores.app.truncateTools ? '1' : '0';
-            const url = `/api/transcript/${sessionId}?show_tools=${showTools}&show_thinking=${showThinking}&truncate_tools=${truncateTools}`;
+            const url = `/api/transcript/${sessionId}?${buildQueryString()}`;
 
             try {
                 const res = await fetch(url);
@@ -137,11 +134,7 @@ export default defineComponent('transcript-viewer', {
 
             markDownloaded(sessionId);
 
-            const showTools = this.stores.app.showTools ? '1' : '0';
-            const showThinking = this.stores.app.showThinking ? '1' : '0';
-            const truncateTools = this.stores.app.truncateTools ? '1' : '0';
-            const url = `/api/download/${sessionId}?show_tools=${showTools}&show_thinking=${showThinking}&truncate_tools=${truncateTools}`;
-
+            const url = `/api/download/${sessionId}?${buildQueryString()}`;
             window.location.href = url;
         }
     },

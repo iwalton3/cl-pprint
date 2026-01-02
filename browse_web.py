@@ -287,16 +287,12 @@ class TranscriptHandler(SimpleHTTPRequestHandler):
             self.handle_list_transcripts()
         elif path.startswith('/api/transcript/'):
             session_id = path.split('/')[-1]
-            show_tools = query.get('show_tools', ['0'])[0] == '1'
-            show_thinking = query.get('show_thinking', ['0'])[0] == '1'
-            truncate_tools = query.get('truncate_tools', ['1'])[0] == '1'
-            self.handle_get_transcript(session_id, show_tools, show_thinking, truncate_tools)
+            options = self._parse_tool_options(query)
+            self.handle_get_transcript(session_id, **options)
         elif path.startswith('/api/download/'):
             session_id = path.split('/')[-1]
-            show_tools = query.get('show_tools', ['0'])[0] == '1'
-            show_thinking = query.get('show_thinking', ['0'])[0] == '1'
-            truncate_tools = query.get('truncate_tools', ['1'])[0] == '1'
-            self.handle_download(session_id, show_tools, show_thinking, truncate_tools)
+            options = self._parse_tool_options(query)
+            self.handle_download(session_id, **options)
         elif path == '/' or path == '/index.html':
             # Serve index.html
             self.path = '/index.html'
@@ -308,6 +304,19 @@ class TranscriptHandler(SimpleHTTPRequestHandler):
         else:
             # Serve static files
             super().do_GET()
+
+    def _parse_tool_options(self, query):
+        """Parse tool display options from query parameters."""
+        return {
+            'show_tools': query.get('show_tools', ['0'])[0] == '1',
+            'show_thinking': query.get('show_thinking', ['0'])[0] == '1',
+            'truncate_tool_calls': query.get('truncate_tool_calls', ['1'])[0] == '1',
+            'truncate_tool_results': query.get('truncate_tool_results', ['1'])[0] == '1',
+            'exclude_edit_tools': query.get('exclude_edit_tools', ['0'])[0] == '1',
+            'exclude_view_tools': query.get('exclude_view_tools', ['0'])[0] == '1',
+            'show_explore_full': query.get('show_explore_full', ['0'])[0] == '1',
+            'show_subagents_full': query.get('show_subagents_full', ['0'])[0] == '1',
+        }
 
     def send_json(self, data: dict, status: int = 200):
         """Send JSON response."""
@@ -329,7 +338,10 @@ class TranscriptHandler(SimpleHTTPRequestHandler):
         }
         self.send_json(data)
 
-    def handle_get_transcript(self, session_id: str, show_tools: bool, show_thinking: bool, truncate_tools: bool = True):
+    def handle_get_transcript(self, session_id: str, show_tools: bool = False, show_thinking: bool = False,
+                               truncate_tool_calls: bool = True, truncate_tool_results: bool = True,
+                               exclude_edit_tools: bool = False, exclude_view_tools: bool = False,
+                               show_explore_full: bool = False, show_subagents_full: bool = False):
         """GET /api/transcript/<id> - Get formatted transcript content."""
         transcript = _transcripts_by_id.get(session_id)
         if not transcript:
@@ -346,7 +358,12 @@ class TranscriptHandler(SimpleHTTPRequestHandler):
                 show_status=False,
                 title=transcript.filename,
                 description=transcript.summary,
-                truncate_tools=truncate_tools
+                truncate_tool_calls=truncate_tool_calls,
+                truncate_tool_results=truncate_tool_results,
+                exclude_edit_tools=exclude_edit_tools,
+                exclude_view_tools=exclude_view_tools,
+                show_explore_full=show_explore_full,
+                show_subagents_full=show_subagents_full
             )
 
             self.send_json({
@@ -358,7 +375,10 @@ class TranscriptHandler(SimpleHTTPRequestHandler):
         except Exception as e:
             self.send_error_json(f'Error formatting transcript: {e}', 500)
 
-    def handle_download(self, session_id: str, show_tools: bool, show_thinking: bool, truncate_tools: bool = True):
+    def handle_download(self, session_id: str, show_tools: bool = False, show_thinking: bool = False,
+                        truncate_tool_calls: bool = True, truncate_tool_results: bool = True,
+                        exclude_edit_tools: bool = False, exclude_view_tools: bool = False,
+                        show_explore_full: bool = False, show_subagents_full: bool = False):
         """GET /api/download/<id> - Download transcript as markdown file."""
         transcript = _transcripts_by_id.get(session_id)
         if not transcript:
@@ -375,7 +395,12 @@ class TranscriptHandler(SimpleHTTPRequestHandler):
                 show_status=False,
                 title=transcript.filename,
                 description=transcript.summary,
-                truncate_tools=truncate_tools
+                truncate_tool_calls=truncate_tool_calls,
+                truncate_tool_results=truncate_tool_results,
+                exclude_edit_tools=exclude_edit_tools,
+                exclude_view_tools=exclude_view_tools,
+                show_explore_full=show_explore_full,
+                show_subagents_full=show_subagents_full
             )
 
             # Generate filename: YYYYMMDD_[ai-filename].md

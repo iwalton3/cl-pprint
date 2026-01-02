@@ -588,24 +588,55 @@ def truncate_text(text, max_len=500):
     return text[:max_len] + f"\n... [{len(text)} chars total, truncated]"
 
 
-def format_tool_input(tool_name, tool_input):
-    """Format tool input in a concise, readable way."""
+def escape_code_block_content(text):
+    """Escape content that will go inside a code block to prevent breaking the block."""
+    if not text:
+        return text
+    # Replace ``` with escaped version inside code blocks
+    return text.replace('```', '` ` `')
+
+
+def strip_system_reminders(text):
+    """Remove <system-reminder> blocks from text."""
+    if not text:
+        return text
+    # Remove system-reminder tags and their content
+    import re
+    return re.sub(r'<system-reminder>.*?</system-reminder>', '', text, flags=re.DOTALL).strip()
+
+
+def format_tool_input(tool_name, tool_input, truncate=True):
+    """Format tool input in a readable way.
+
+    Args:
+        tool_name: Name of the tool
+        tool_input: Input dict for the tool
+        truncate: Whether to truncate long content
+    """
     if not tool_input:
         return "(no input)"
+
+    def maybe_truncate(text, max_len=500):
+        return truncate_text(text, max_len) if truncate else text
 
     # Handle specific tools with cleaner formatting
     if tool_name == 'Write':
         file_path = tool_input.get('file_path', 'unknown')
         content = tool_input.get('content', '')
-        return f"**File:** `{file_path}`\n```\n{truncate_text(content, 300)}\n```"
+        # Escape content to prevent breaking code blocks
+        escaped = escape_code_block_content(maybe_truncate(content, 300))
+        return f"**File:** `{file_path}`\n```\n{escaped}\n```"
 
     elif tool_name == 'Edit':
         file_path = tool_input.get('file_path', 'unknown')
         old_string = tool_input.get('old_string', '')
         new_string = tool_input.get('new_string', '')
+        # Escape content to prevent breaking code blocks
+        old_escaped = escape_code_block_content(maybe_truncate(old_string, 200))
+        new_escaped = escape_code_block_content(maybe_truncate(new_string, 200))
         result = f"**File:** `{file_path}`\n"
-        result += f"**Old:**\n```\n{truncate_text(old_string, 200)}\n```\n"
-        result += f"**New:**\n```\n{truncate_text(new_string, 200)}\n```"
+        result += f"**Old:**\n```\n{old_escaped}\n```\n"
+        result += f"**New:**\n```\n{new_escaped}\n```"
         return result
 
     elif tool_name == 'Read':
@@ -623,13 +654,18 @@ def format_tool_input(tool_name, tool_input):
         result = ""
         if desc:
             result += f"**Description:** {desc}\n"
-        result += f"```bash\n{truncate_text(command, 500)}\n```"
+        escaped_cmd = escape_code_block_content(maybe_truncate(command, 500))
+        result += f"```bash\n{escaped_cmd}\n```"
         return result
 
     elif tool_name == 'Grep':
         pattern = tool_input.get('pattern', '')
         path = tool_input.get('path', '.')
-        return f"**Pattern:** `{pattern}` in `{path}`"
+        output_mode = tool_input.get('output_mode', '')
+        result = f"**Pattern:** `{pattern}` in `{path}`"
+        if output_mode:
+            result += f" (mode: {output_mode})"
+        return result
 
     elif tool_name == 'Glob':
         pattern = tool_input.get('pattern', '')
@@ -642,15 +678,20 @@ def format_tool_input(tool_name, tool_input):
         subagent = tool_input.get('subagent_type', '')
         result = f"**Type:** {subagent}  \n**Description:** {desc}"
         if prompt:
-            result += f"  \n**Prompt:**\n> {truncate_text(prompt, 300)}"
+            prompt_text = maybe_truncate(prompt, 500)
+            # Format prompt as blockquote for better readability
+            prompt_lines = prompt_text.split('\n')
+            quoted_prompt = '\n'.join(f"> {line}" for line in prompt_lines)
+            result += f"  \n**Prompt:**\n{quoted_prompt}"
         return result
 
     elif tool_name == 'TodoWrite':
         todos = tool_input.get('todos', [])
         if todos:
-            items = [f"- [{t.get('status', '?')}] {t.get('content', '')}" for t in todos[:10]]
+            max_todos = 10 if truncate else len(todos)
+            items = [f"- [{t.get('status', '?')}] {t.get('content', '')}" for t in todos[:max_todos]]
             result = "\n".join(items)
-            if len(todos) > 10:
+            if truncate and len(todos) > 10:
                 result += f"\n... and {len(todos) - 10} more"
             return result
         return "(empty todo list)"
@@ -659,9 +700,10 @@ def format_tool_input(tool_name, tool_input):
         # Generic: show truncated JSON
         try:
             json_str = json.dumps(tool_input, indent=2)
-            return f"```json\n{truncate_text(json_str, 500)}\n```"
+            escaped = escape_code_block_content(maybe_truncate(json_str, 500))
+            return f"```json\n{escaped}\n```"
         except:
-            return truncate_text(str(tool_input), 500)
+            return maybe_truncate(str(tool_input), 500)
 
 
 def format_tool_result(tool_name, result_content, is_error=False, truncate=True):
@@ -669,12 +711,19 @@ def format_tool_result(tool_name, result_content, is_error=False, truncate=True)
     # Extract actual text from content blocks
     text = extract_text_content(result_content)
 
+    # Strip system reminders from tool results (they're noise from the logging)
+    text = strip_system_reminders(text)
+
+    if not text:
+        return "(empty result)"
+
     # Apply truncation if enabled
     def maybe_truncate(t, max_len=1000):
         return truncate_text(t, max_len) if truncate else t
 
     if is_error:
-        return f"```\n{maybe_truncate(text)}\n```"
+        escaped = escape_code_block_content(maybe_truncate(text))
+        return f"```\n{escaped}\n```"
 
     # Task/agent results should be rendered as markdown (they contain analysis/summaries)
     if tool_name == 'Task':
@@ -686,11 +735,13 @@ def format_tool_result(tool_name, result_content, is_error=False, truncate=True)
 
     # File reading results - show as code
     if tool_name in ('Read', 'Bash', 'Grep', 'Glob'):
-        return f"```\n{maybe_truncate(text)}\n```"
+        escaped = escape_code_block_content(maybe_truncate(text))
+        return f"```\n{escaped}\n```"
 
     # Default: show as preformatted if it looks like code/output, else as text
     if '\n' in text or text.startswith('{') or text.startswith('['):
-        return f"```\n{maybe_truncate(text)}\n```"
+        escaped = escape_code_block_content(maybe_truncate(text))
+        return f"```\n{escaped}\n```"
     else:
         return maybe_truncate(text)
 
@@ -698,19 +749,36 @@ def format_tool_result(tool_name, result_content, is_error=False, truncate=True)
 def extract_message_content(entry, show_tools=False, show_thinking=False,
                             ask_user_questions=None, ask_user_answers=None,
                             exit_plan_modes=None, tool_id_to_name=None,
-                            truncate_tools=True):
+                            tool_id_to_input=None,
+                            truncate_tool_calls=True, truncate_tool_results=True,
+                            exclude_edit_tools=False, exclude_view_tools=False,
+                            show_explore_full=False, show_subagents_full=False):
     """Extract content parts from an entry. Returns (content_parts, is_brief, has_plan_result, content_type).
 
     tool_id_to_name: Dict that maps tool_use IDs to tool names. Passed in to track across messages.
-                     Gets updated when tool_use items are encountered.
-    truncate_tools: If True, truncate tool inputs/outputs. If False, show full content.
+    tool_id_to_input: Dict that maps tool_use IDs to tool inputs (for subagent type detection).
+    truncate_tool_calls: If True, truncate tool inputs.
+    truncate_tool_results: If True, truncate tool outputs.
+    exclude_edit_tools: If True, hide Edit tool calls.
+    exclude_view_tools: If True, hide Read/Grep/Glob tool calls.
+    show_explore_full: If True, always show Explore agent calls in full (overrides truncation).
+    show_subagents_full: If True, always show non-Explore subagent calls in full.
     content_type: 'text', 'tool_call', 'tool_result', or 'mixed' - indicates primary content type
     """
     if tool_id_to_name is None:
         tool_id_to_name = {}
+    if tool_id_to_input is None:
+        tool_id_to_input = {}
 
     if '_error' in entry:
         return [f"[ERROR] {entry['_error']}"], False, False, 'text'
+
+    # Handle queue-operation entries (user messages sent during tool execution)
+    if entry.get('type') == 'queue-operation' and entry.get('operation') == 'enqueue':
+        queued_content = entry.get('content', '')
+        if queued_content and queued_content.strip():
+            return [queued_content], False, False, 'text'
+        return [], False, False, 'text'
 
     msg = entry.get('message', {})
     content = msg.get('content', '')
@@ -771,8 +839,30 @@ def extract_message_content(entry, show_tools=False, show_thinking=False,
                 tool_name = item.get('name', 'unknown')
                 tool_input = item.get('input', {})
                 tool_id = item.get('id', '')
-                # Track tool name for result formatting
+                # Track tool name and input for result formatting
                 tool_id_to_name[tool_id] = tool_name
+                tool_id_to_input[tool_id] = tool_input
+
+                # Check if this tool should be excluded
+                if exclude_edit_tools and tool_name in ('Edit', 'Write'):
+                    continue
+                if exclude_view_tools and tool_name in ('Read', 'Grep', 'Glob'):
+                    continue
+
+                # Determine if this is an Explore or other subagent Task
+                is_explore = False
+                is_subagent = False
+                if tool_name == 'Task':
+                    subagent_type = tool_input.get('subagent_type', '')
+                    is_explore = subagent_type == 'Explore'
+                    is_subagent = bool(subagent_type) and not is_explore
+
+                # Determine truncation for this tool call
+                should_truncate_input = truncate_tool_calls
+                if is_explore and show_explore_full:
+                    should_truncate_input = False
+                elif is_subagent and show_subagents_full:
+                    should_truncate_input = False
 
                 if tool_name == 'AskUserQuestion':
                     answer = ask_user_answers.get(tool_id) if ask_user_answers else None
@@ -782,9 +872,10 @@ def extract_message_content(entry, show_tools=False, show_thinking=False,
                         shown_tool_results.add(tool_id)
                 elif tool_name == 'ExitPlanMode':
                     content_parts.append("\n📋 **Submitting plan for approval...**")
-                elif show_tools:
+                elif show_tools or (is_explore and show_explore_full) or (is_subagent and show_subagents_full):
+                    has_tool_use = True
                     content_parts.append(f"\n📦 **Tool: {tool_name}**")
-                    content_parts.append(format_tool_input(tool_name, tool_input))
+                    content_parts.append(format_tool_input(tool_name, tool_input, truncate=should_truncate_input))
 
             elif item_type == 'tool_result':
                 tool_id = item.get('tool_use_id', '')
@@ -797,6 +888,29 @@ def extract_message_content(entry, show_tools=False, show_thinking=False,
                 if ask_user_questions and tool_id in ask_user_questions:
                     continue
 
+                # Check if this result's tool was excluded
+                tool_name = tool_id_to_name.get(tool_id, 'unknown')
+                if exclude_edit_tools and tool_name in ('Edit', 'Write'):
+                    continue
+                if exclude_view_tools and tool_name in ('Read', 'Grep', 'Glob'):
+                    continue
+
+                # Determine if this is an Explore or other subagent Task result
+                is_explore = False
+                is_subagent = False
+                if tool_name == 'Task':
+                    tool_input = tool_id_to_input.get(tool_id, {})
+                    subagent_type = tool_input.get('subagent_type', '')
+                    is_explore = subagent_type == 'Explore'
+                    is_subagent = bool(subagent_type) and not is_explore
+
+                # Determine truncation for this tool result
+                should_truncate_result = truncate_tool_results
+                if is_explore and show_explore_full:
+                    should_truncate_result = False
+                elif is_subagent and show_subagents_full:
+                    should_truncate_result = False
+
                 if exit_plan_modes and tool_id in exit_plan_modes:
                     plan_info = exit_plan_modes[tool_id]
                     content_parts.append("\n" + format_plan_result(
@@ -807,11 +921,10 @@ def extract_message_content(entry, show_tools=False, show_thinking=False,
                         plan_index=plan_info.get('plan_index')
                     ))
                     has_plan_result = True
-                elif show_tools:
-                    tool_name = tool_id_to_name.get(tool_id, 'unknown')
+                elif show_tools or (is_explore and show_explore_full) or (is_subagent and show_subagents_full):
                     status = "❌ Error" if is_error else "✅ Result"
                     content_parts.append(f"\n{status} ({tool_name}):\n")
-                    content_parts.append(format_tool_result(tool_name, result_content, is_error, truncate=truncate_tools))
+                    content_parts.append(format_tool_result(tool_name, result_content, is_error, truncate=should_truncate_result))
 
             elif item_type == 'thinking':
                 if show_thinking:
@@ -839,7 +952,9 @@ def extract_message_content(entry, show_tools=False, show_thinking=False,
 
 def format_jsonl(input_path, output_path=None, show_tools=False, show_thinking=False,
                  show_timestamps=True, show_status=False, title=None, description=None,
-                 truncate_tools=True):
+                 truncate_tool_calls=True, truncate_tool_results=True,
+                 exclude_edit_tools=False, exclude_view_tools=False,
+                 show_explore_full=False, show_subagents_full=False):
     """Format entire JSONL file.
 
     Args:
@@ -851,7 +966,12 @@ def format_jsonl(input_path, output_path=None, show_tools=False, show_thinking=F
         show_status: Include brief status messages
         title: Custom title for the document (default: "Claude Agent Conversation Log")
         description: Description to show below title as blockquote
-        truncate_tools: Truncate tool inputs/outputs (default True)
+        truncate_tool_calls: Truncate tool inputs (default True)
+        truncate_tool_results: Truncate tool outputs (default True)
+        exclude_edit_tools: Hide Edit tool calls (default False)
+        exclude_view_tools: Hide Read/Grep/Glob tool calls (default False)
+        show_explore_full: Always show Explore agent calls in full (default False)
+        show_subagents_full: Always show non-Explore subagent calls in full (default False)
     """
     output_lines = []
 
@@ -898,17 +1018,25 @@ def format_jsonl(input_path, output_path=None, show_tools=False, show_thinking=F
     plan_index_counter = 0
     user_has_plan = set()  # Track which user messages have plan results
     tool_id_to_name = {}  # Track tool_id -> tool_name across all messages
+    tool_id_to_input = {}  # Track tool_id -> tool_input for subagent detection
     while i < len(entries):
         entry = entries[i]
         entry_type = entry.get('type', 'unknown')
         msg = entry.get('message', {})
-        role = msg.get('role', entry_type)
+        # queue-operation with enqueue are user messages
+        if entry_type == 'queue-operation' and entry.get('operation') == 'enqueue':
+            role = 'user'
+        else:
+            role = msg.get('role', entry_type)
         timestamp = format_timestamp(entry.get('timestamp'))
 
         content_parts, is_brief, has_plan, content_type = extract_message_content(
             entry, show_tools, show_thinking,
             ask_user_questions, ask_user_answers, exit_plan_modes, tool_id_to_name,
-            truncate_tools
+            tool_id_to_input,
+            truncate_tool_calls, truncate_tool_results,
+            exclude_edit_tools, exclude_view_tools,
+            show_explore_full, show_subagents_full
         )
 
         if not content_parts:
@@ -938,7 +1066,10 @@ def format_jsonl(input_path, output_path=None, show_tools=False, show_thinking=F
                     next_parts, _, _, _ = extract_message_content(
                         next_entry, show_tools, show_thinking,
                         ask_user_questions, ask_user_answers, exit_plan_modes, tool_id_to_name,
-                        truncate_tools
+                        tool_id_to_input,
+                        truncate_tool_calls, truncate_tool_results,
+                        exclude_edit_tools, exclude_view_tools,
+                        show_explore_full, show_subagents_full
                     )
                     if not next_parts:
                         # Empty entry (tool results, queue-operation, etc.) - skip
@@ -951,7 +1082,10 @@ def format_jsonl(input_path, output_path=None, show_tools=False, show_thinking=F
                 next_parts, next_brief, next_has_plan, _ = extract_message_content(
                     next_entry, show_tools, show_thinking,
                     ask_user_questions, ask_user_answers, exit_plan_modes, tool_id_to_name,
-                    truncate_tools
+                    tool_id_to_input,
+                    truncate_tool_calls, truncate_tool_results,
+                    exclude_edit_tools, exclude_view_tools,
+                    show_explore_full, show_subagents_full
                 )
 
                 if not next_parts:
@@ -979,9 +1113,11 @@ def format_jsonl(input_path, output_path=None, show_tools=False, show_thinking=F
                 continue
 
         # Regular output - determine header based on content type
-        if show_tools and content_type == 'tool_call':
+        # Use tool headers when showing tools OR when showing explore/subagent full
+        show_tool_headers = show_tools or show_explore_full or show_subagents_full
+        if show_tool_headers and content_type == 'tool_call':
             role_display = "📦 Tool Call"
-        elif show_tools and content_type == 'tool_result':
+        elif show_tool_headers and content_type == 'tool_result':
             role_display = "📦 Tool Result"
         elif role == 'user':
             role_display = "🧑 USER"
@@ -1145,7 +1281,7 @@ Examples:
     python format_jsonl.py session.jsonl --show-tools
     python format_jsonl.py session.jsonl output.md --show-tools --show-thinking
     python format_jsonl.py session.jsonl --exclude-timestamps
-    python format_jsonl.py session.jsonl --show-status
+    python format_jsonl.py session.jsonl --show-explore-full
         """
     )
     parser.add_argument('input', help='Input JSONL file')
@@ -1158,8 +1294,21 @@ Examples:
                         help='Show status messages like "Let me X" (hidden by default)')
     parser.add_argument('--exclude-timestamps', action='store_true',
                         help='Hide timestamps from output')
-    parser.add_argument('--no-truncate-tools', action='store_true',
-                        help='Show full tool inputs/outputs without truncation')
+    # Truncation options
+    parser.add_argument('--no-truncate-calls', action='store_true',
+                        help='Show full tool call inputs without truncation')
+    parser.add_argument('--no-truncate-results', action='store_true',
+                        help='Show full tool results without truncation')
+    # Exclusion options
+    parser.add_argument('--exclude-edit-tools', action='store_true',
+                        help='Hide Edit tool calls')
+    parser.add_argument('--exclude-view-tools', action='store_true',
+                        help='Hide Read/Grep/Glob tool calls')
+    # Special agent options
+    parser.add_argument('--show-explore-full', action='store_true',
+                        help='Always show Explore agent calls in full (overrides truncation)')
+    parser.add_argument('--show-subagents-full', action='store_true',
+                        help='Always show non-Explore subagent calls in full')
 
     args = parser.parse_args()
 
@@ -1170,7 +1319,12 @@ Examples:
         show_thinking=args.show_thinking,
         show_timestamps=not args.exclude_timestamps,
         show_status=args.show_status,
-        truncate_tools=not args.no_truncate_tools
+        truncate_tool_calls=not args.no_truncate_calls,
+        truncate_tool_results=not args.no_truncate_results,
+        exclude_edit_tools=args.exclude_edit_tools,
+        exclude_view_tools=args.exclude_view_tools,
+        show_explore_full=args.show_explore_full,
+        show_subagents_full=args.show_subagents_full
     )
 
 

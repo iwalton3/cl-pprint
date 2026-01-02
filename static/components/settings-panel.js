@@ -1,5 +1,5 @@
 import { defineComponent, html, when } from '../lib/framework.js';
-import { appStore, setShowTools, setShowThinking, setTruncateTools } from '../stores/app-store.js';
+import { appStore, setSetting } from '../stores/app-store.js';
 
 export default defineComponent('settings-panel', {
     stores: { app: appStore },
@@ -14,22 +14,12 @@ export default defineComponent('settings-panel', {
             this.state.open = !this.state.open;
         },
 
-        handleToolsChange(e) {
-            e.stopPropagation();
-            setShowTools(e.target.checked);
-            window.dispatchEvent(new CustomEvent('settings-changed'));
-        },
-
-        handleThinkingChange(e) {
-            e.stopPropagation();
-            setShowThinking(e.target.checked);
-            window.dispatchEvent(new CustomEvent('settings-changed'));
-        },
-
-        handleTruncateChange(e) {
-            e.stopPropagation();
-            setTruncateTools(e.target.checked);
-            window.dispatchEvent(new CustomEvent('settings-changed'));
+        handleChange(key) {
+            return (e) => {
+                e.stopPropagation();
+                setSetting(key, e.target.checked);
+                window.dispatchEvent(new CustomEvent('settings-changed'));
+            };
         },
 
         handleDropdownClick(e) {
@@ -58,24 +48,69 @@ export default defineComponent('settings-panel', {
                 </button>
                 ${when(this.state.open, () => html`
                     <div class="settings-dropdown" on-click="handleDropdownClick">
-                        <label>
-                            <input type="checkbox"
-                                   checked="${this.stores.app.showTools}"
-                                   on-change="${this.handleToolsChange}">
-                            Show Tool Calls
-                        </label>
-                        <label>
-                            <input type="checkbox"
-                                   checked="${this.stores.app.showThinking}"
-                                   on-change="${this.handleThinkingChange}">
-                            Show Thinking Blocks
-                        </label>
-                        <label>
-                            <input type="checkbox"
-                                   checked="${this.stores.app.truncateTools}"
-                                   on-change="${this.handleTruncateChange}">
-                            Truncate Tool Output
-                        </label>
+                        <div class="settings-section">
+                            <div class="settings-section-title">Display</div>
+                            <label>
+                                <input type="checkbox"
+                                       checked="${this.stores.app.showTools}"
+                                       on-change="${this.handleChange('showTools')}">
+                                Show Tool Calls
+                            </label>
+                            <label>
+                                <input type="checkbox"
+                                       checked="${this.stores.app.showThinking}"
+                                       on-change="${this.handleChange('showThinking')}">
+                                Show Thinking Blocks
+                            </label>
+                        </div>
+
+                        <div class="settings-section">
+                            <div class="settings-section-title">Truncation</div>
+                            <label>
+                                <input type="checkbox"
+                                       checked="${this.stores.app.truncateToolCalls}"
+                                       on-change="${this.handleChange('truncateToolCalls')}">
+                                Truncate Tool Inputs
+                            </label>
+                            <label>
+                                <input type="checkbox"
+                                       checked="${this.stores.app.truncateToolResults}"
+                                       on-change="${this.handleChange('truncateToolResults')}">
+                                Truncate Tool Results
+                            </label>
+                        </div>
+
+                        <div class="settings-section">
+                            <div class="settings-section-title">Exclude Tools</div>
+                            <label>
+                                <input type="checkbox"
+                                       checked="${this.stores.app.excludeEditTools}"
+                                       on-change="${this.handleChange('excludeEditTools')}">
+                                Hide Edit Commands
+                            </label>
+                            <label>
+                                <input type="checkbox"
+                                       checked="${this.stores.app.excludeViewTools}"
+                                       on-change="${this.handleChange('excludeViewTools')}">
+                                Hide View Commands
+                            </label>
+                        </div>
+
+                        <div class="settings-section">
+                            <div class="settings-section-title">Agent Display</div>
+                            <label>
+                                <input type="checkbox"
+                                       checked="${this.stores.app.showExploreFull}"
+                                       on-change="${this.handleChange('showExploreFull')}">
+                                Show Explore Agents Full
+                            </label>
+                            <label>
+                                <input type="checkbox"
+                                       checked="${this.stores.app.showSubagentsFull}"
+                                       on-change="${this.handleChange('showSubagentsFull')}">
+                                Show Other Subagents Full
+                            </label>
+                        </div>
                     </div>
                 `)}
             </div>
