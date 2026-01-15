@@ -463,7 +463,9 @@ First, list the conversation files using Glob to see what's available.
 
 Then, for each conversation file, launch a Task subagent to extract lessons:
 - Use subagent_type="general-purpose" and model="sonnet"
-- Launch multiple subagents IN PARALLEL for efficiency (use a single message with multiple Task tool calls)
+- Process conversations in SEQUENTIAL BATCHES of 3-5 at a time
+- Wait for each batch to fully complete before launching the next batch
+- Do NOT launch all subagents at once - the completion notifications will interleave and cause issues
 
 For each subagent, construct a prompt like this (replace CONVERSATION_PATH and OUTPUT_PATH with actual paths):
 
@@ -510,8 +512,8 @@ Write your output to: OUTPUT_PATH
 
 Output paths should be: {temp_dir}/lessons/{{conversation-filename}}.md
 
-IMPORTANT: Wait for ALL subagents to complete before proceeding to Phase 2.
-You can check completion by reading the lessons directory to verify files were created.
+IMPORTANT: After EACH BATCH completes, verify the lesson files were written by listing {temp_dir}/lessons/.
+Only proceed to Phase 2 after ALL batches are done and ALL expected lesson files exist.
 """
 
     return f"""You are cl-dream, helping Claude Code learn from past conversations.
