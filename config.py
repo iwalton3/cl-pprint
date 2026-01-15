@@ -26,7 +26,12 @@ DEFAULTS = {
     "project_name_skip_dirs": [
         "home", "working", "Users", "Desktop", "Documents",
         "source", "src", "projects", "repos"
-    ]
+    ],
+    "dream": {
+        "state_file": "~/.claude/dream_state.json",
+        "sonnet_timeout": 300,
+        "opus_timeout": 600
+    }
 }
 
 
