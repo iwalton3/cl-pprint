@@ -564,11 +564,12 @@ Then proceed to Phase 2: Update CLAUDE.md for each primary project."""
 
     cmd = [
         'claude',
-        '--print',  # Non-interactive, but still allows tool use
+        '--print',
         '--model', 'opus',
         '--system-prompt', system_prompt,
         '--allowedTools', 'Read,Write,Edit,Glob,Grep,Task',
-        '--verbose',  # Show tool calls for visibility
+        '--output-format', 'stream-json',  # Stream output as it happens
+        '--verbose',
         *add_dir_args,
     ]
 
@@ -576,18 +577,61 @@ Then proceed to Phase 2: Update CLAUDE.md for each primary project."""
     console.print("[dim]Opus will extract lessons and update documentation.[/dim]\n")
 
     try:
-        # Use Popen for real-time output streaming while passing prompt via stdin
+        # Use Popen for real-time output streaming
         process = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
         )
         # Send prompt and close stdin
         process.stdin.write(user_prompt)
         process.stdin.close()
 
-        # Wait for completion (output streams to terminal in real-time)
-        process.wait(timeout=OPUS_TIMEOUT)
+        # Stream and parse JSON output for display
+        import select
+        while True:
+            # Check if process has output available
+            if process.stdout:
+                line = process.stdout.readline()
+                if line:
+                    try:
+                        data = json.loads(line)
+                        msg_type = data.get('type', '')
+
+                        # Display different message types
+                        if msg_type == 'assistant' and 'message' in data:
+                            content = data['message'].get('content', [])
+                            for item in content:
+                                if isinstance(item, dict):
+                                    if item.get('type') == 'text':
+                                        console.print(item.get('text', ''), end='')
+                                    elif item.get('type') == 'tool_use':
+                                        tool_name = item.get('name', 'unknown')
+                                        console.print(f"\n[dim]>>> Using tool: {tool_name}[/dim]", style="dim")
+                                elif isinstance(item, str):
+                                    console.print(item, end='')
+                        elif msg_type == 'result':
+                            # Final result
+                            if data.get('subtype') == 'success':
+                                console.print("\n[green]Session completed successfully[/green]")
+                            else:
+                                console.print(f"\n[yellow]Session ended: {data.get('subtype', 'unknown')}[/yellow]")
+                    except json.JSONDecodeError:
+                        # Not JSON, print as-is
+                        console.print(line, end='')
+                elif process.poll() is not None:
+                    break
+            else:
+                break
+
+        # Print any stderr
+        if process.stderr:
+            stderr_output = process.stderr.read()
+            if stderr_output:
+                console.print(f"[dim]{stderr_output}[/dim]")
+
         return process.returncode == 0
     except subprocess.TimeoutExpired:
         process.kill()

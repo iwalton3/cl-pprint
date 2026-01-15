@@ -4,11 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-This is a toolkit for processing Claude Code agent JSONL logs. It provides four main utilities:
+This is a toolkit for processing Claude Code agent JSONL logs. It provides five main utilities:
 - **format_jsonl.py** - Converts JSONL logs to readable markdown
 - **summarize_transcripts.py** - Generates AI summaries using local Ollama
 - **browse_transcripts.py** - Interactive TUI for browsing and exporting transcripts
 - **browse_web.py** - Web-based browser with SPA interface
+- **cl_dream.py** - Extracts lessons from conversations and updates documentation
 
 ## Web Framework
 
@@ -53,6 +54,8 @@ Settings are loaded from `config.json` (copy from `config.example.json`). Key se
 - `project_name_skip_dirs` - Directory names to strip from project display names
 
 The `config.py` module provides `get(key)` for dot-notation access and `get_path(key)` for path expansion.
+
+**Note**: Default paths use Unix conventions (`~/.claude/`). See BUG_REPORTS.md for Windows compatibility.
 
 ## Architecture
 
@@ -99,6 +102,8 @@ Not all session files contain actual conversation content. Handle these cases:
 
 **Branching conversations**: Parent files with only `type: "summary"` entries contain no actual messages - they're pointers to leaf conversation files via `leafUuid`.
 
+**Empty sessions**: Sessions can exist with no user interaction (file-history-snapshots only). Filter these when browsing or generating summaries.
+
 ## Format Options
 
 Tool display is controlled by multiple flags that interact:
@@ -115,7 +120,7 @@ Specific tool options override general ones (e.g., `show_explore_full=True` show
 ### Markdown Formatting
 - **4+ spaces triggers code blocks**: Use 2-3 spaces for indentation in lists
 - **Triple backticks in content**: Use `escape_code_fences()` to replace ``` with ` ` `
-- **VS Code anchor format**: Headers become `#-lowercase-with-dashes` anchors
+- **VS Code anchor format**: Headers become `#-lowercase-with-dashes` anchors (custom `<a id>` tags don't work)
 - **GFM underline**: Use `<ins>` not `<u>` for underline
 
 ### Ollama API
@@ -132,5 +137,27 @@ Specific tool options override general ones (e.g., `show_explore_full=True` show
 - **Don't pre-truncate**: Let Rich handle with `no_wrap=True, overflow="ellipsis"`
 
 ### Tool Processing
-- **Tool IDs don't persist across messages**: Use shared `tool_id_to_name` dict
-- **System reminders in results**: Strip with non-greedy regex `<system-reminder>.*?</system-reminder>`
+- **Tool IDs don't persist across messages**: Use shared `tool_id_to_name` dict passed through all extraction calls
+- **System reminders in results**: Strip with non-greedy regex `<system-reminder>.*?</system-reminder>` (greedy `.*` will match too much)
+
+### Plan Tracking
+- **State accumulation**: Track both Write and Edit operations to reconstruct plan state at each ExitPlanMode
+- **Renumbering noise**: Filter diff lines that are just list item renumbering (strip numbers, compare text)
+
+### Cross-Platform
+- **Windows paths differ**: Claude Code uses `%APPDATA%\Claude` on Windows, not `~/.claude`
+- **Path expansion**: Use `os.path.expanduser()` and `os.path.expandvars()` together
+
+## Documentation
+
+Detailed documentation for specific topics:
+
+| File | When to read |
+|------|--------------|
+| [docs/jsonl-format.md](docs/jsonl-format.md) | Working on JSONL parsing, handling new entry types, debugging empty sessions |
+| [docs/formatting.md](docs/formatting.md) | Modifying markdown output, plan diff display, message batching logic |
+| [docs/ollama-integration.md](docs/ollama-integration.md) | Working on summarization, changing prompts, debugging API issues |
+| [docs/tui-patterns.md](docs/tui-patterns.md) | Modifying browse_transcripts.py, Rich tables, selection systems |
+| [docs/web-browser.md](docs/web-browser.md) | Modifying browse_web.py, VDX components, format options UI |
+| [FRAMEWORK.md](FRAMEWORK.md) | Any VDX component work in static/ directory |
+| [BUG_REPORTS.md](BUG_REPORTS.md) | Before starting work, to see known issues |
