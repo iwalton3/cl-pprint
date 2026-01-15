@@ -601,14 +601,22 @@ Create the docs/ folder if it doesn't exist. Use it for detailed documentation t
 - Remove docs that are completely obsolete
 
 **docs/ index in CLAUDE.md:**
-At the end of CLAUDE.md, include a "## Documentation" section that indexes all docs/ files:
-- List each doc file with a brief description
-- Include guidance on WHEN to read each doc into context, e.g.:
-  * "Read docs/parsing.md when working on the JSONL parser or format_jsonl.py"
-  * "Read docs/troubleshooting.md when debugging unexpected behavior"
-  * "Read docs/architecture.md before making structural changes"
-- This helps future Claude sessions know which docs to load for specific tasks
+At the end of CLAUDE.md, include a "## Documentation Index" section as a markdown table:
+
+```markdown
+## Documentation Index
+
+| Doc File | When to Read |
+|----------|--------------|
+| `docs/architecture.md` | Before making structural changes |
+| `docs/parsing.md` | Working on JSONL parser or format_jsonl.py |
+| `docs/troubleshooting.md` | Debugging unexpected behavior |
+```
+
+- Use table format for scannability
+- "When to Read" column helps future sessions know which docs to load for specific tasks
 - Keep descriptions concise (one line each)
+- Reference specific features, domains, or task types
 
 **BUG_REPORTS.md:**
 If any lessons contain "Unfixed Bugs" sections, create or update BUG_REPORTS.md in the project root:
