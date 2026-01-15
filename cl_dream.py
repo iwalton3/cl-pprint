@@ -590,9 +590,7 @@ Then proceed to Phase 2: Update CLAUDE.md for each primary project."""
         process.stdin.close()
 
         # Stream and parse JSON output for display
-        import select
         while True:
-            # Check if process has output available
             if process.stdout:
                 line = process.stdout.readline()
                 if line:
@@ -600,27 +598,31 @@ Then proceed to Phase 2: Update CLAUDE.md for each primary project."""
                         data = json.loads(line)
                         msg_type = data.get('type', '')
 
-                        # Display different message types
+                        # Handle assistant messages (text and tool use)
                         if msg_type == 'assistant' and 'message' in data:
                             content = data['message'].get('content', [])
                             for item in content:
                                 if isinstance(item, dict):
                                     if item.get('type') == 'text':
-                                        console.print(item.get('text', ''), end='')
+                                        text = item.get('text', '')
+                                        if text:
+                                            console.print(text)
                                     elif item.get('type') == 'tool_use':
                                         tool_name = item.get('name', 'unknown')
-                                        console.print(f"\n[dim]>>> Using tool: {tool_name}[/dim]", style="dim")
+                                        console.print(f"[dim]>>> Using tool: {tool_name}[/dim]")
                                 elif isinstance(item, str):
-                                    console.print(item, end='')
+                                    console.print(item)
+
+                        # Handle result (final output)
                         elif msg_type == 'result':
-                            # Final result
                             if data.get('subtype') == 'success':
                                 console.print("\n[green]Session completed successfully[/green]")
                             else:
                                 console.print(f"\n[yellow]Session ended: {data.get('subtype', 'unknown')}[/yellow]")
+
                     except json.JSONDecodeError:
                         # Not JSON, print as-is
-                        console.print(line, end='')
+                        console.print(line.rstrip())
                 elif process.poll() is not None:
                     break
             else:
