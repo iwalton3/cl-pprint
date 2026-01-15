@@ -229,25 +229,41 @@ def has_conversation_content(jsonl_path: Path, min_user_chars: int = 100) -> boo
     return total_user_chars >= min_user_chars and has_assistant_content
 
 
-def find_matching_project_dir(project_path: Path, claude_projects: Path) -> Path | None:
-    """Find the Claude project directory that matches a given project path."""
-    path_slug = str(project_path.resolve()).replace('/', '-').lstrip('-')
+def find_matching_project_dirs(project_path: Path, claude_projects: Path) -> list[Path]:
+    """Find Claude project directories that match a given project path.
 
-    # Direct match
+    Returns all matching directories including subdirectory projects.
+    Claude Code converts path separators AND dots to dashes in directory names.
+    """
+    # Claude Code converts both '/' and '.' to '-' in directory names
+    path_slug = str(project_path.resolve()).replace('/', '-').replace('.', '-').lstrip('-')
+
+    matches = []
+
     for dir_path in claude_projects.iterdir():
-        if dir_path.is_dir():
-            if dir_path.name.lstrip('-') == path_slug:
-                return dir_path
+        if not dir_path.is_dir():
+            continue
 
-    # Partial match using last few path segments
-    project_parts = [p.lower() for p in project_path.resolve().parts[-3:]]
-    for dir_path in claude_projects.iterdir():
-        if dir_path.is_dir():
-            dir_parts = [p.lower() for p in dir_path.name.split('-')]
-            if all(p in dir_parts for p in project_parts if p):
-                return dir_path
+        dir_name = dir_path.name.lstrip('-')
 
-    return None
+        # Exact match
+        if dir_name == path_slug:
+            matches.append(dir_path)
+        # Subdirectory match (e.g., -working-JFD-API-TestDataScripts for /working/JFD.API)
+        elif dir_name.startswith(path_slug + '-'):
+            matches.append(dir_path)
+
+    # If no direct matches, try partial match using path segments
+    if not matches:
+        # Convert dots to dashes in path parts to match Claude's conversion
+        project_parts = [p.lower().replace('.', '-') for p in project_path.resolve().parts[-3:] if p and p != '/']
+        for dir_path in claude_projects.iterdir():
+            if dir_path.is_dir():
+                dir_parts = [p.lower() for p in dir_path.name.lstrip('-').split('-')]
+                if all(p in dir_parts for p in project_parts):
+                    matches.append(dir_path)
+
+    return matches
 
 
 def find_new_conversations(primary_dirs: list[Path], related_dirs: list[Path],
@@ -280,29 +296,30 @@ def find_new_conversations(primary_dirs: list[Path], related_dirs: list[Path],
     seen_sessions = set()
 
     for proj in all_dirs:
-        claude_dir = find_matching_project_dir(proj, claude_projects)
-        if claude_dir:
-            console.print(f"[dim]Found Claude project dir: {claude_dir.name}[/dim]")
-            for jsonl in claude_dir.glob("*.jsonl"):
-                if jsonl.name.startswith("agent-"):
-                    continue
-
-                session_id = jsonl.stem
-                if session_id in seen_sessions:
-                    continue
-
-                current_mtime = jsonl.stat().st_mtime
-                last_processed_mtime = all_processed.get(session_id)
-
-                if last_processed_mtime is None or current_mtime > last_processed_mtime:
-                    # Filter out empty/trivial sessions
-                    if not has_conversation_content(jsonl):
-                        skipped_empty += 1
-                        seen_sessions.add(session_id)
+        claude_dirs = find_matching_project_dirs(proj, claude_projects)
+        if claude_dirs:
+            for claude_dir in claude_dirs:
+                console.print(f"[dim]Found Claude project dir: {claude_dir.name}[/dim]")
+                for jsonl in claude_dir.glob("*.jsonl"):
+                    if jsonl.name.startswith("agent-"):
                         continue
 
-                    conversations.append((jsonl, current_mtime, proj))
-                    seen_sessions.add(session_id)
+                    session_id = jsonl.stem
+                    if session_id in seen_sessions:
+                        continue
+
+                    current_mtime = jsonl.stat().st_mtime
+                    last_processed_mtime = all_processed.get(session_id)
+
+                    if last_processed_mtime is None or current_mtime > last_processed_mtime:
+                        # Filter out empty/trivial sessions
+                        if not has_conversation_content(jsonl):
+                            skipped_empty += 1
+                            seen_sessions.add(session_id)
+                            continue
+
+                        conversations.append((jsonl, current_mtime, proj))
+                        seen_sessions.add(session_id)
         else:
             console.print(f"[yellow]Warning: No Claude project dir found for {proj}[/yellow]")
 
@@ -764,7 +781,14 @@ Examples:
             sys.exit(1)
         primary_dirs.append(resolved)
 
-    related_dirs = [p.resolve() for p in args.related if p.resolve().exists()]
+    # Related dirs don't need to exist on disk - they may be old paths that were moved
+    # but Claude still has conversation logs for them
+    related_dirs = []
+    for p in args.related:
+        resolved = p.resolve()
+        related_dirs.append(resolved)
+        if not resolved.exists():
+            console.print(f"[dim]Note: Related dir {resolved} doesn't exist on disk (looking for old conversations)[/dim]")
 
     console.print(f"[bold]cl-dream[/bold] - Learning from past conversations\n")
     console.print(f"Primary projects: {[str(p) for p in primary_dirs]}")
