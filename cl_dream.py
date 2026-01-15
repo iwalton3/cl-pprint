@@ -507,6 +507,16 @@ Non-obvious behaviors, edge cases, or quirks discovered.
 Be specific and actionable. Include file paths and code snippets when relevant.
 Skip trivial items. Focus on lessons that would genuinely help future sessions.
 
+**Session Type Detection:**
+At the TOP of your output, add a "Session Type" line indicating if this appears to be:
+- `Session Type: Development` - Normal coding/implementation session
+- `Session Type: PR Review` - Reviewing a pull request (look for: "gh pr", "PR #", "review", "pull request")
+- `Session Type: Bug Investigation` - Investigating/debugging an issue
+- `Session Type: Research` - Exploring/understanding code without changes
+
+If the session appears to be a PR review, add a warning at the top of the Unfixed Bugs section:
+"⚠️ UNMERGED CODE WARNING: These bugs were identified during a PR review. The code may not have been merged. Verify file paths exist before acting on these."
+
 Write your output to: OUTPUT_PATH
 ---
 
@@ -561,17 +571,31 @@ After lessons are extracted (or if using cached lessons from {temp_dir}/lessons/
   * Outdated (code they reference no longer exists)
   * Contradicted by multiple lessons
 
+**Validation Before Including Lessons:**
+When synthesizing lessons into CLAUDE.md or docs/:
+1. Check "Session Type" tags in lesson files - be cautious with "PR Review" sessions
+2. If a lesson references specific file paths, spot-check that key files exist
+3. Skip lessons that reference patterns/code that clearly don't exist in the codebase
+4. Patterns and gotchas are usually safe to include (they're about concepts)
+5. Specific file path references need validation (they're about implementation)
+
 **docs/ folder:**
 Create the docs/ folder if it doesn't exist. Use it for detailed documentation that doesn't fit in CLAUDE.md:
-- Create new docs when a topic has enough depth to warrant its own file
-- Update existing docs when new lessons add to that topic
-- Revamp/reorganize docs when they become outdated or unclear
+- **PREFER updating existing docs** over creating new ones - check what already exists first!
+- Merge related lessons into existing docs (e.g., database lessons → database-patterns.md)
+- Create new docs only when:
+  * No existing doc covers the topic
+  * A domain/topic has 5+ substantial lessons (e.g., payments-troubleshooting.md)
+  * The content would make an existing doc too long or unfocused
 - Good candidates for docs/:
   * Architecture overviews (architecture.md)
-  * API documentation (api.md)
+  * Domain-specific troubleshooting guides when many lessons exist for that domain
   * Complex subsystem guides (e.g., parsing.md, state-management.md)
-  * Troubleshooting guides (troubleshooting.md)
   * Setup/configuration guides (setup.md)
+- Keep lessons-learned.md for **cross-cutting concerns** that don't fit elsewhere:
+  * General patterns (validation, authorization, deployment)
+  * Gotchas that span multiple domains
+  * Quick reference rules
 - Name files descriptively in lowercase-kebab-case.md
 - Each doc should be self-contained but can reference others
 - Remove docs that are completely obsolete
@@ -591,8 +615,21 @@ If any lessons contain "Unfixed Bugs" sections, create or update BUG_REPORTS.md 
 - Collect all unfixed bugs from the lessons
 - Group by severity/area if possible
 - Include: description, context, potential fix (if known), which conversation it was found in
-- If a bug report already exists and the bug appears to be fixed (check codebase), remove it
 - Format as a checklist so bugs can be tracked
+
+**CRITICAL - File Path Validation for BUG_REPORTS.md:**
+Before adding ANY bug to BUG_REPORTS.md, you MUST verify that the referenced file paths actually exist in the current codebase:
+1. Use Glob or Read to check if the file exists (e.g., `Glob("**/SSOLogin.cs")`)
+2. If the file does NOT exist, DO NOT add that bug - it may be from:
+   - An unmerged PR that was reviewed but never merged
+   - Code that was later deleted or refactored
+   - A different branch that isn't the current one
+3. If you're unsure, err on the side of NOT including the bug
+4. This is especially important for bugs from "PR review" or "code review" sessions - that code may never have been merged
+
+Example validation:
+- Bug references "AuthService.cs:54" → Run `Glob("**/AuthService.cs")` → If "No files found", skip this bug
+- Bug references "OrderHandler.cs:176" → Run `Glob("**/OrderHandler.cs")` → If file exists, include it
 
 ## Final Output
 
@@ -602,6 +639,10 @@ After updating all files, print a summary:
 - New/updated docs in docs/ folder
 - Number of unfixed bugs added to BUG_REPORTS.md
 - Any rules that were removed/modified (with reasons)
+- **Skipped content** - List any bugs or lessons that were skipped because:
+  * Referenced files don't exist in codebase (likely from unmerged PR)
+  * Marked as "PR Review" session with uncertain merge status
+  * Content was outdated or no longer applicable
 """
 
 
