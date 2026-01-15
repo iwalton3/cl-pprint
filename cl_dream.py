@@ -169,6 +169,66 @@ def save_lessons_cache(project_dirs: list[Path], lessons_dir: Path):
 # Conversation Discovery
 # =============================================================================
 
+def has_conversation_content(jsonl_path: Path, min_user_chars: int = 100) -> bool:
+    """Check if a session has meaningful conversation content.
+
+    Filters out:
+    - Sessions with only file-history-snapshot entries (no actual messages)
+    - Sessions with only summary entries (branch parent files)
+    - Trivial sessions (user content below min_user_chars threshold)
+
+    Args:
+        jsonl_path: Path to the JSONL file
+        min_user_chars: Minimum total characters of user content to be considered meaningful
+
+    Returns:
+        True if session has meaningful content worth processing
+    """
+    total_user_chars = 0
+    has_assistant_content = False
+
+    try:
+        with open(jsonl_path, 'r') as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    entry = json.loads(line)
+                    entry_type = entry.get('type')
+
+                    # Check for user messages
+                    if entry_type == 'user':
+                        msg = entry.get('message', {})
+                        content = msg.get('content', '')
+                        if isinstance(content, str):
+                            total_user_chars += len(content)
+                        elif isinstance(content, list):
+                            for item in content:
+                                if isinstance(item, dict) and item.get('type') == 'text':
+                                    total_user_chars += len(item.get('text', ''))
+
+                    # Check for assistant messages with actual content
+                    elif entry_type == 'assistant':
+                        msg = entry.get('message', {})
+                        content = msg.get('content', [])
+                        if isinstance(content, list):
+                            for item in content:
+                                if isinstance(item, dict):
+                                    if item.get('type') == 'text' and item.get('text'):
+                                        has_assistant_content = True
+                                    elif item.get('type') == 'tool_use':
+                                        has_assistant_content = True
+
+                except json.JSONDecodeError:
+                    continue
+
+    except (IOError, OSError):
+        return False
+
+    # Must have both user content above threshold AND assistant response
+    return total_user_chars >= min_user_chars and has_assistant_content
+
+
 def find_matching_project_dir(project_path: Path, claude_projects: Path) -> Path | None:
     """Find the Claude project directory that matches a given project path."""
     path_slug = str(project_path.resolve()).replace('/', '-').lstrip('-')
@@ -199,6 +259,7 @@ def find_new_conversations(primary_dirs: list[Path], related_dirs: list[Path],
     """
     conversations = []
     claude_projects = Path.home() / '.claude' / 'projects'
+    skipped_empty = 0
 
     if not claude_projects.exists():
         console.print(f"[yellow]Warning: Claude projects directory not found: {claude_projects}[/yellow]")
@@ -234,10 +295,19 @@ def find_new_conversations(primary_dirs: list[Path], related_dirs: list[Path],
                 last_processed_mtime = all_processed.get(session_id)
 
                 if last_processed_mtime is None or current_mtime > last_processed_mtime:
+                    # Filter out empty/trivial sessions
+                    if not has_conversation_content(jsonl):
+                        skipped_empty += 1
+                        seen_sessions.add(session_id)
+                        continue
+
                     conversations.append((jsonl, current_mtime, proj))
                     seen_sessions.add(session_id)
         else:
             console.print(f"[yellow]Warning: No Claude project dir found for {proj}[/yellow]")
+
+    if skipped_empty > 0:
+        console.print(f"[dim]Skipped {skipped_empty} empty/trivial sessions[/dim]")
 
     conversations.sort(key=lambda x: x[1])
     return conversations
