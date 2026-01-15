@@ -507,6 +507,12 @@ Non-obvious behaviors, edge cases, or quirks discovered.
 Be specific and actionable. Include file paths and code snippets when relevant.
 Skip trivial items. Focus on lessons that would genuinely help future sessions.
 
+**IMPORTANT - Distinguish Discussed vs Implemented:**
+- Mark patterns that were DISCUSSED but may not have been IMPLEMENTED with "(discussed)"
+- Mark patterns that were CLEARLY IMPLEMENTED (you see the actual code written) with "(implemented)"
+- For PR reviews, assume code was DISCUSSED unless you see explicit merge confirmation
+- Example: "ApiError factory methods (discussed)" vs "FileUploadFilterProvider (implemented)"
+
 **Session Type Detection:**
 At the TOP of your output, add a "Session Type" line indicating if this appears to be:
 - `Session Type: Development` - Normal coding/implementation session
@@ -574,10 +580,14 @@ After lessons are extracted (or if using cached lessons from {temp_dir}/lessons/
 **Validation Before Including Lessons:**
 When synthesizing lessons into CLAUDE.md or docs/:
 1. Check "Session Type" tags in lesson files - be cautious with "PR Review" sessions
-2. If a lesson references specific file paths, spot-check that key files exist
-3. Skip lessons that reference patterns/code that clearly don't exist in the codebase
-4. Patterns and gotchas are usually safe to include (they're about concepts)
-5. Specific file path references need validation (they're about implementation)
+2. Look for "(discussed)" vs "(implemented)" markers:
+   - "(implemented)" items → Include, but Phase 3 will verify
+   - "(discussed)" items → SKIP unless you verify the code exists first
+3. If a lesson references specific file paths, spot-check that key files exist
+4. Skip lessons that reference patterns/code that clearly don't exist in the codebase
+5. Patterns and gotchas are usually safe to include (they're about concepts)
+6. Specific file path references need validation (they're about implementation)
+7. When in doubt, EXCLUDE - Phase 3 validation cannot add content, only remove it
 
 **docs/ folder:**
 Create the docs/ folder if it doesn't exist. Use it for detailed documentation that doesn't fit in CLAUDE.md:
@@ -639,18 +649,75 @@ Example validation:
 - Bug references "AuthService.cs:54" → Run `Glob("**/AuthService.cs")` → If "No files found", skip this bug
 - Bug references "OrderHandler.cs:176" → Run `Glob("**/OrderHandler.cs")` → If file exists, include it
 
+## Phase 3: Documentation Validation
+
+After updating documentation, launch an INDEPENDENT validation subagent for EACH primary project.
+
+IMPORTANT: The validation subagent has FRESH CONTEXT - it has NOT seen the lessons and will not be biased by what "should" exist. This is intentional.
+
+For each primary project, launch a Task subagent:
+- Use subagent_type="general-purpose" and model="sonnet"
+- The subagent validates documentation against the actual codebase
+
+Construct the validation prompt like this (replace PROJECT_DIR with actual path):
+
+---
+You are a documentation validator with FRESH EYES. You have NOT seen any lesson files or conversation transcripts. Your job is to verify that documentation references actually exist in the codebase.
+
+Project directory: PROJECT_DIR
+
+## Tasks:
+
+1. Read CLAUDE.md
+2. Read all files in docs/ folder (use Glob to find them)
+3. Read BUG_REPORTS.md if it exists
+
+4. For EACH document, verify ALL specific code references:
+   - File paths mentioned (e.g., "JFD.API/Domains/...")
+   - Class names (e.g., "class ApiError", "FileUploadFilterProvider")
+   - Method/function names with specific signatures
+   - Patterns that claim specific code exists
+
+5. Use Glob and Grep to verify each reference:
+   - `Glob("**/filename.cs")` to check file existence
+   - `Grep("class ClassName")` to verify class exists
+   - `Grep("public static.*MethodName")` to verify methods
+
+6. For EACH unverified reference, use the Edit tool to:
+   - REMOVE the incorrect content entirely, OR
+   - If removal breaks context, REWRITE to describe the actual pattern
+
+7. DO NOT add "[UNVERIFIED]" tags - either fix it or remove it
+
+## Validation Checklist:
+- [ ] Every file path mentioned → Glob to verify exists
+- [ ] Every class name mentioned → Grep to verify exists
+- [ ] Every method/function mentioned → Grep to verify exists
+- [ ] Code examples → Verify the patterns match actual code
+- [ ] BUG_REPORTS.md entries → Verify referenced files exist
+
+## Output:
+Print a validation report:
+1. **Verified**: References confirmed to exist (count)
+2. **Removed**: Content removed because reference doesn't exist (list each)
+3. **Rewritten**: Content rewritten to match actual code (list each)
+4. **Files Modified**: List of documentation files that were changed
+---
+
+Wait for all validation subagents to complete before proceeding to Final Output.
+
 ## Final Output
 
-After updating all files, print a summary:
+After validation is complete, print a summary:
 - Number of lessons processed
 - Changes made to each project's CLAUDE.md
 - New/updated docs in docs/ folder
 - Number of unfixed bugs added to BUG_REPORTS.md
 - Any rules that were removed/modified (with reasons)
-- **Skipped content** - List any bugs or lessons that were skipped because:
-  * Referenced files don't exist in codebase (likely from unmerged PR)
-  * Marked as "PR Review" session with uncertain merge status
-  * Content was outdated or no longer applicable
+- **Validation results** - Summary from Phase 3:
+  * References that were verified
+  * Content that was removed (couldn't verify)
+  * Content that was rewritten (to match actual code)
 """
 
 
