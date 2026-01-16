@@ -57,7 +57,7 @@ python format_jsonl.py session.jsonl --show-tools --show-thinking
 
 ### Generate AI summaries with `summarize_transcripts_claude.py`
 
-Creates short summaries for all transcripts using Claude Haiku via the API. No GPU required, minimal API cost.
+Creates short summaries for all transcripts using Claude Haiku via Claude Code. No GPU required, lightweight on usage limits.
 
 ```bash
 python summarize_transcripts_claude.py
@@ -76,7 +76,7 @@ python summarize_transcripts.py
 python summarize_transcripts.py --force  # Re-summarize all
 ```
 
-**When to use:** If you prefer local inference or don't want to use the Claude API.
+**When to use:** If you prefer local inference or want to avoid using your Claude Code usage limits.
 
 ## Installation
 
@@ -84,11 +84,7 @@ python summarize_transcripts.py --force  # Re-summarize all
 pip install -r requirements.txt
 ```
 
-For the Claude-based summarizer, set your API key:
-
-```bash
-export ANTHROPIC_API_KEY=your-key-here
-```
+The Claude-based tools require [Claude Code](https://claude.ai/code) to be installed and authenticated.
 
 For the Ollama-based summarizer (optional), install [Ollama](https://ollama.ai/) and pull a model:
 
