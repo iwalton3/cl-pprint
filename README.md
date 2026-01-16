@@ -1,12 +1,82 @@
 # cl-pprint
 
-A toolkit for processing Claude Code agent JSONL logs. Browse, search, summarize, and export conversation transcripts to readable markdown.
+A toolkit for working with Claude Code conversation logs. Browse transcripts, extract lessons learned, and export to readable formats.
 
-## Features
+## What Can You Do?
 
-- **Format** - Convert JSONL logs to readable markdown with plan diffs, navigation links, and batched progress sections
-- **Summarize** - Generate AI summaries using local Ollama
-- **Browse** - Interactive TUI for searching, filtering, and batch exporting transcripts
+### Learn from past conversations with `cl_dream.py`
+
+Extract insights and lessons from your Claude Code sessions and automatically update your project documentation. Uses a two-phase architecture: parallel Sonnet calls extract lessons from each conversation, then a single Opus session synthesizes them into documentation updates.
+
+> **Requires Claude Max subscription.** This script spawns multiple Claude CLI subprocesses and uses Opus for synthesis. Not recommended for Pro or lower tiers due to rate limits and cost.
+
+```bash
+# Process recent conversations for a project
+python cl_dream.py /path/to/project
+
+# Include related directories (for moved/renamed projects)
+python cl_dream.py /path/to/project --related /old/path
+
+# Skip extraction if lesson files exist, just synthesize
+python cl_dream.py /path/to/project --retry
+```
+
+**When to use:** After completing a complex feature or debugging session. Captures what worked, what didn't, and updates CLAUDE.md with project-specific guidance.
+
+### Browse transcripts in your browser with `browse_web.py`
+
+A web-based interface for searching, viewing, and exporting transcripts. Launches a local server and opens in your default browser.
+
+```bash
+python browse_web.py
+python browse_web.py --port 8080 --no-browser
+```
+
+**When to use:** When you want a visual interface to explore conversations, search across projects, or share transcript exports with others.
+
+### Browse transcripts in terminal with `browse_transcripts.py`
+
+Interactive TUI for power users who prefer staying in the terminal.
+
+```bash
+python browse_transcripts.py
+```
+
+**When to use:** Quick lookups, batch exports, keyboard-driven workflow.
+
+### Format a single transcript with `format_jsonl.py`
+
+Convert a JSONL log file to readable markdown.
+
+```bash
+python format_jsonl.py session.jsonl output.md
+python format_jsonl.py session.jsonl --show-tools --show-thinking
+```
+
+**When to use:** Exporting a specific conversation, creating documentation, or debugging what happened in a session.
+
+### Generate AI summaries with `summarize_transcripts_claude.py`
+
+Creates short summaries for all transcripts using Claude Haiku via the API. No GPU required, minimal API cost.
+
+```bash
+python summarize_transcripts_claude.py
+python summarize_transcripts_claude.py --force  # Re-summarize all
+python summarize_transcripts_claude.py --dry-run  # Preview only
+```
+
+**When to use:** Before browsing, to make it easier to find relevant conversations. Recommended for most users.
+
+### Generate AI summaries with `summarize_transcripts.py` (Ollama)
+
+Alternative summarizer using local Ollama. Requires a local GPU and Ollama setup.
+
+```bash
+python summarize_transcripts.py
+python summarize_transcripts.py --force  # Re-summarize all
+```
+
+**When to use:** If you prefer local inference or don't want to use the Claude API.
 
 ## Installation
 
@@ -14,7 +84,13 @@ A toolkit for processing Claude Code agent JSONL logs. Browse, search, summarize
 pip install -r requirements.txt
 ```
 
-For AI summarization, install [Ollama](https://ollama.ai/) and pull a model:
+For the Claude-based summarizer, set your API key:
+
+```bash
+export ANTHROPIC_API_KEY=your-key-here
+```
+
+For the Ollama-based summarizer (optional), install [Ollama](https://ollama.ai/) and pull a model:
 
 ```bash
 ollama pull qwen3:30b-a3b-thinking-2507-q4_K_M
@@ -28,84 +104,46 @@ Copy the example config and customize:
 cp config.example.json config.json
 ```
 
-Configuration options:
+Key settings:
 
 | Key | Description |
 |-----|-------------|
-| `ollama.model` | Ollama model for summarization |
+| `ollama.model` | Model for summarization (e.g., `qwen3:30b-a3b`) |
 | `ollama.url` | Ollama API endpoint |
-| `ollama.timeout` | Request timeout in seconds |
-| `ollama.temperature` | Model temperature (0.0-1.0) |
-| `ollama.max_tokens` | Maximum tokens to generate |
-| `paths.claude_projects` | Directory containing Claude project logs |
-| `paths.summary_cache` | Path to summary cache file |
-| `paths.export_dir` | Default export directory |
-| `project_name_skip_dirs` | Directory names to skip when parsing project names |
+| `paths.claude_projects` | Where Claude stores logs (default: `~/.claude/projects`) |
+| `paths.export_dir` | Where to save exported markdown |
 
-## Usage
-
-### Format a single transcript
-
-```bash
-python format_jsonl.py session.jsonl output.md
-```
-
-Options:
-- `--show-tools` - Include tool calls
-- `--show-thinking` - Include thinking blocks
-- `--show-status` - Include brief status messages
-- `--exclude-timestamps` - Hide timestamps
-
-### Generate AI summaries
-
-```bash
-# Summarize all transcripts (uses cache)
-python summarize_transcripts.py
-
-# Force re-summarize
-python summarize_transcripts.py --force
-
-# Preview without calling Ollama
-python summarize_transcripts.py --dry-run
-```
-
-### Interactive browser
-
-```bash
-python browse_transcripts.py
-```
-
-Browser commands:
+## TUI Browser Commands
 
 | Key | Action |
 |-----|--------|
 | `n` / `p` | Next / previous page |
 | `s` | Search transcripts |
 | `f` | Filter by project |
-| `c` | Clear filters |
 | `#` | Toggle selection (e.g., `42`) |
 | `#-#` | Range select (e.g., `1-5`) |
-| `a` | Select/deselect all on page |
-| `v#` | View transcript details (e.g., `v42`) |
+| `v#` | View transcript details |
 | `e` | Export selected to markdown |
 | `q` | Quit |
 
-## Output Format
+## Format Options
 
-Exported markdown includes:
+The formatter and exporters support these flags:
 
-- Session metadata (ID, branch, working directory)
-- User messages with timestamps
-- Assistant responses (brief messages batched as "Progress" sections)
-- Plan approval/rejection with diffs between revisions
-- Navigation links to skip between plan versions
-- AskUserQuestion dialogs with inline answers
+| Flag | Effect |
+|------|--------|
+| `--show-tools` | Include tool calls and results |
+| `--show-thinking` | Include Claude's thinking blocks |
+| `--show-status` | Include brief status messages |
+| `--exclude-timestamps` | Hide timestamps |
 
 ## Data Locations
 
-- Claude logs: `~/.claude/projects/<project>/<session>.jsonl`
-- Summary cache: `~/.claude/transcript_summaries.json`
-- Exports: `./exports/<project>/`
+| Path | Contents |
+|------|----------|
+| `~/.claude/projects/` | Claude Code conversation logs (JSONL) |
+| `~/.claude/transcript_summaries.json` | Cached AI summaries |
+| `./exports/` | Exported markdown files |
 
 ## License
 
