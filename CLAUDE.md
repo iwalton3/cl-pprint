@@ -9,7 +9,7 @@ This is a toolkit for processing Claude Code agent JSONL logs. It provides five 
 - **summarize_transcripts.py** - Generates AI summaries using local Ollama
 - **browse_transcripts.py** - Interactive TUI for browsing and exporting transcripts
 - **browse_web.py** - Web-based browser with SPA interface
-- **cl_dream.py** - Extracts lessons from conversations and updates documentation
+- **cl_dream.py** - Extracts lessons from conversations and updates documentation (two-phase architecture)
 
 ## Web Framework
 
@@ -35,6 +35,11 @@ python browse_transcripts.py [--dir ~/.claude/projects]
 Launch the web browser (opens in default browser):
 ```bash
 python browse_web.py [--port 8080] [--no-browser]
+```
+
+Extract lessons and update documentation:
+```bash
+python cl_dream.py /path/to/project [--related /path/to/related] [--retry] [--dry-run]
 ```
 
 ## Dependencies
@@ -83,6 +88,12 @@ The `config.py` module provides `get(key)` for dot-notation access and `get_path
 - Loads `config.json` and merges with defaults
 - Provides `get()` and `get_path()` helpers
 
+**cl_dream.py** uses two-phase architecture:
+- Phase 1: Parallel subprocess calls to Claude CLI (Sonnet) extract lessons from each conversation
+- Phase 2: Single Opus session synthesizes lessons and updates documentation with clean context
+- Batches subagents 3-5 at a time to prevent async completion message flooding
+- Uses `--retry` flag to skip Phase 1 if lesson files already exist
+
 ## Data Paths
 
 - Claude logs: `~/.claude/projects/<project-dir>/<session>.jsonl`
@@ -102,7 +113,12 @@ Not all session files contain actual conversation content. Handle these cases:
 
 **Branching conversations**: Parent files with only `type: "summary"` entries contain no actual messages - they're pointers to leaf conversation files via `leafUuid`.
 
-**Empty sessions**: Sessions can exist with no user interaction (file-history-snapshots only). Filter these when browsing or generating summaries.
+**Empty sessions**: Sessions can exist with no user interaction (file-history-snapshots only). Filter these when browsing or generating summaries. Three types of low-value sessions to filter:
+1. File-history-only (no messages at all)
+2. Summary-only branch parents (pointers to leaf conversations)
+3. Trivial test prompts (<100 chars of user content)
+
+The `has_conversation_content()` pattern checks both user message length AND assistant response presence.
 
 ## Format Options
 
@@ -140,6 +156,11 @@ Specific tool options override general ones (e.g., `show_explore_full=True` show
 - **Tool IDs don't persist across messages**: Use shared `tool_id_to_name` dict passed through all extraction calls
 - **System reminders in results**: Strip with non-greedy regex `<system-reminder>.*?</system-reminder>` (greedy `.*` will match too much)
 
+### Subprocess / CLI
+- **Long prompts interpreted as file paths**: Pass prompts via stdin, not command-line arguments
+- **`subprocess.run()` with `input=` buffers output**: Use `Popen` with stdin piped if you need streaming
+- **Claude CLI `--print` doesn't stream**: Use `--output-format stream-json` for incremental output
+
 ### Plan Tracking
 - **State accumulation**: Track both Write and Edit operations to reconstruct plan state at each ExitPlanMode
 - **Renumbering noise**: Filter diff lines that are just list item renumbering (strip numbers, compare text)
@@ -147,6 +168,11 @@ Specific tool options override general ones (e.g., `show_explore_full=True` show
 ### Cross-Platform
 - **Windows paths differ**: Claude Code uses `%APPDATA%\Claude` on Windows, not `~/.claude`
 - **Path expansion**: Use `os.path.expanduser()` and `os.path.expandvars()` together
+
+### Claude Code Conventions
+- **Directory naming**: Both `/` and `.` characters are converted to `-` in project directory names (e.g., `/working/JFD.API` → `-working-JFD-API`)
+- **Subdirectory projects**: Running `claude code` from subdirectories creates separate project directories that won't match parent directory searches
+- **Related directories**: Use `--related` flag for moved projects - historical paths don't need to exist on disk
 
 ## Documentation
 
@@ -159,5 +185,6 @@ Detailed documentation for specific topics:
 | [docs/ollama-integration.md](docs/ollama-integration.md) | Working on summarization, changing prompts, debugging API issues |
 | [docs/tui-patterns.md](docs/tui-patterns.md) | Modifying browse_transcripts.py, Rich tables, selection systems |
 | [docs/web-browser.md](docs/web-browser.md) | Modifying browse_web.py, VDX components, format options UI |
+| [docs/cl-dream.md](docs/cl-dream.md) | Modifying cl_dream.py, lesson extraction, two-phase architecture |
 | [FRAMEWORK.md](FRAMEWORK.md) | Any VDX component work in static/ directory |
 | [BUG_REPORTS.md](BUG_REPORTS.md) | Before starting work, to see known issues |

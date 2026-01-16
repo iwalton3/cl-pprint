@@ -18,12 +18,11 @@ This document covers Markdown formatting patterns and gotchas for `format_jsonl.
 
 ### Triple Backticks in Content
 
-File content containing ``` will break outer code blocks. Always escape:
+File content containing ``` will break outer code blocks. The code uses inline escaping:
 
 ```python
-def escape_code_fences(text):
-    """Escape triple backticks to prevent markdown code block breakage."""
-    return text.replace('```', '` ` `')
+# In format_jsonl.py, the escape is done inline in escape_code_block_content()
+text.replace('```', '` ` `')
 ```
 
 ### VS Code Anchor Format
@@ -71,15 +70,7 @@ Standard diff format with section context:
 
 ### Filtering Renumbering Changes
 
-Detect and filter list renumbering noise:
-
-```python
-def is_renumber_only(old_line, new_line):
-    """Check if diff pair is just list renumbering."""
-    old_stripped = re.sub(r'^\d+\.\s*', '', old_line)
-    new_stripped = re.sub(r'^\d+\.\s*', '', new_line)
-    return old_stripped == new_stripped
-```
+When displaying plan diffs, renumbering can be filtered by comparing the text content after stripping list numbers.
 
 ## Message Batching
 

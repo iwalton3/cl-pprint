@@ -5,7 +5,7 @@ Zero-dependency reactive web framework. No build step required.
 ## Component Pattern
 
 ```javascript
-import { defineComponent, html, when, each } from 'vdx/lib/framework.js';
+import { defineComponent, html, when, each } from '../lib/framework.js';
 
 export default defineComponent('my-component', {
     props: { title: 'Default' },          // Observed attributes
@@ -77,11 +77,7 @@ ${awaitThen(promise, data => html`<p>${data}</p>`, html`<p>Loading...</p>`)}
 // Trusted HTML only
 ${raw(trustedHtml)}
 
-// Fine-grained reactivity (auto-contain all expressions)
-import { opt } from './lib/opt.js';
-template: eval(opt(function() {
-    return html`<p>${this.state.count}</p>`;  // Each ${} is isolated
-}))
+// Note: Fine-grained reactivity optimization (opt) is not included in this project's VDX implementation
 ```
 
 ## Passing Props
@@ -182,13 +178,13 @@ ${when(this.stores.auth.isAdmin, () => html`<admin-panel></admin-panel>`)}
 
 **Optional: untracked() to skip proxying entirely:**
 ```javascript
-import { untracked } from 'vdx/lib/framework.js';
+import { untracked } from '../lib/framework.js';
 data() { return { songs: untracked([]) }; }  // Items aren't reactive
 ```
 
 **Immediate DOM updates:**
 ```javascript
-import { flushSync } from 'vdx/lib/framework.js';
+import { flushSync } from '../lib/framework.js';
 flushSync(() => { this.state.showInput = true; });
 this.refs.input.focus();
 ```
@@ -213,7 +209,7 @@ defineComponent('my-component', {
 ## Router
 
 ```javascript
-import { enableRouting } from 'vdx/lib/router.js';
+import { enableRouting } from '../lib/router.js';
 
 enableRouting(outlet, {
     '/': { component: 'home-page' },
@@ -235,28 +231,9 @@ defineComponent('my-component', {
 });
 ```
 
-## Component Library (cl-*)
+## Component Library
 
-Common components from `vdx/componentlib/`:
-
-```javascript
-// Buttons
-<cl-button label="Save" on-click="save"></cl-button>
-<cl-button label="Delete" severity="danger"></cl-button>
-
-// Form inputs
-<cl-input-text x-model="name" label="Name"></cl-input-text>
-<cl-select-box options="${options}" x-model="selected"></cl-select-box>
-<cl-checkbox x-model="agreed" label="I agree"></cl-checkbox>
-
-// Dialogs
-<cl-dialog visible="${showDialog}" header="Confirm" on-hide="closeDialog">
-    <p>Are you sure?</p>
-</cl-dialog>
-
-// Tables
-<cl-datatable items="${rows}" columns="${cols}"></cl-datatable>
-```
+Note: This project does not include a separate component library. Components are in `static/components/`.
 
 ## Reactive Boundaries (Critical for Performance)
 

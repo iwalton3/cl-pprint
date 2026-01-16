@@ -1085,7 +1085,7 @@ Examples:
         console.print(f"[green]Using {len(cached)} cached lessons (--retry mode)[/green]\n")
 
     # Load state
-    state = {} if args.force else load_state()
+    state = {"version": 1, "projects": {}} if args.force else load_state()
     if args.force:
         console.print("[yellow]Force mode: reprocessing all conversations[/yellow]\n")
 

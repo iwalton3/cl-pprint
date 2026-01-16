@@ -89,36 +89,21 @@ epilog = "Type a number to toggle selection (absolute ID)"
 ### Command Input with History
 
 ```python
-from prompt_toolkit import PromptSession
-from prompt_toolkit.history import FileHistory
+from prompt_toolkit import prompt as pt_prompt
+from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.history import InMemoryHistory
 
-session = PromptSession(
-    history=FileHistory('.browse_history'),
-    completer=CommandCompleter()
-)
+completer = WordCompleter(['export', 'filter', 'sort', 'help', 'quit'])
+history = InMemoryHistory()
 
 while True:
     try:
-        cmd = session.prompt('> ')
+        cmd = pt_prompt('> ', completer=completer, history=history)
         handle_command(cmd)
     except KeyboardInterrupt:
         continue
     except EOFError:
         break
-```
-
-### Auto-Completion
-
-```python
-from prompt_toolkit.completion import Completer, Completion
-
-class CommandCompleter(Completer):
-    def get_completions(self, document, complete_event):
-        text = document.text_before_cursor.lower()
-        commands = ['export', 'filter', 'sort', 'help', 'quit']
-        for cmd in commands:
-            if cmd.startswith(text):
-                yield Completion(cmd, start_position=-len(text))
 ```
 
 ## Export Organization
