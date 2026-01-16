@@ -11,7 +11,7 @@ A toolkit for processing Claude Code agent JSONL logs. Browse, search, summarize
 ## Installation
 
 ```bash
-pip install rich prompt_toolkit requests
+pip install -r requirements.txt
 ```
 
 For AI summarization, install [Ollama](https://ollama.ai/) and pull a model:
