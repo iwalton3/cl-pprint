@@ -196,7 +196,7 @@ Return ONLY valid JSON, no other text."""
 
     try:
         cmd = [
-            'claude',
+            config.get_claude_cli(),
             '--print',
             '--model', 'haiku',
             '--output-format', 'text',

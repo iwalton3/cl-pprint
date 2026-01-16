@@ -503,7 +503,7 @@ def extract_single_lesson(conversation_path: Path, output_path: Path) -> tuple[P
         prompt = f"{LESSON_EXTRACTION_PROMPT}\n\n---\n\nConversation transcript:\n\n{conversation_content}"
 
         cmd = [
-            'claude',
+            config.get_claude_cli(),
             '--print',
             '--model', 'sonnet',
             '--output-format', 'text',
@@ -928,7 +928,7 @@ Read the lesson files and update CLAUDE.md for each primary project, then run va
         add_dir_args.extend(['--add-dir', str(d)])
 
     cmd = [
-        'claude',
+        config.get_claude_cli(),
         '--print',
         '--model', 'opus',
         '--system-prompt', system_prompt,

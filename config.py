@@ -5,6 +5,8 @@ Loads settings from config.json if present, otherwise uses defaults.
 """
 
 import json
+import shutil
+import sys
 from pathlib import Path
 
 CONFIG_PATH = Path(__file__).parent / "config.json"
@@ -78,3 +80,17 @@ def get_path(key: str) -> Path:
     if value:
         return Path(value).expanduser()
     return None
+
+
+def get_claude_cli() -> str:
+    """Get the path to the Claude CLI executable.
+
+    On Windows, checks ~/.local/bin/claude.exe first.
+    On other platforms, uses 'claude' from PATH.
+    """
+    if sys.platform == 'win32':
+        windows_path = Path.home() / '.local' / 'bin' / 'claude.exe'
+        if windows_path.exists():
+            return str(windows_path)
+    # Fall back to PATH lookup
+    return shutil.which('claude') or 'claude'
