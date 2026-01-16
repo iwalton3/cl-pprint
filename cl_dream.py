@@ -416,6 +416,14 @@ LESSON_EXTRACTION_PROMPT = """Read the conversation transcript and extract lesso
 
 Output a markdown document with these sections:
 
+## Session Summary
+Brief context about what was accomplished in this session:
+- **Task**: One-line description of what was being worked on
+- **Key files modified**: List 3-5 most important files that were created/edited (look for Write/Edit tool calls)
+- **Outcome**: Completed / In progress / Blocked / Abandoned
+
+This summary helps contextualize the lessons and identify which documentation might need updates.
+
 ## Session Type
 Indicate the session type:
 - `Development` - Normal coding/implementation session
@@ -427,10 +435,13 @@ Indicate the session type:
 Errors that were caught and corrected during the session.
 - What went wrong
 - How it was fixed
+- **File path** where the mistake occurred (if applicable)
+- **Impact**: How much time was wasted? (minor / significant / major)
 
 ## Unfixed Bugs
 Issues identified but NOT resolved by the end of the session.
 - What the bug is
+- **File path and function/line** where the bug exists
 - Why it wasn't fixed (ran out of time, deferred, etc.)
 - Potential fix if known
 
@@ -440,7 +451,7 @@ If this appears to be a PR review session, add at the top:
 ## Solutions Discovered
 Successful approaches that worked well.
 - The problem
-- The solution
+- The solution (with **file path** if it's code-specific)
 - Why it works
 
 ## Patterns Identified
@@ -448,11 +459,21 @@ Useful coding patterns, conventions, or architectural decisions.
 - Pattern name/description
 - When to use it
 - Example if applicable
+- **Scope**: Is this project-specific or a general pattern?
 
 ## Gotchas
 Non-obvious behaviors, edge cases, or quirks discovered.
 - The gotcha
 - When it's relevant
+- **Scope**: Is this specific to this project/framework or broadly applicable?
+
+## Documentation Impact
+Note if this session changes how something works in a way that might affect existing documentation:
+- What behavior or API changed?
+- What existing documentation might be affected? (guess based on topic)
+- Any new concepts introduced that should be documented?
+
+Write "None" if the session was routine work that doesn't affect documentation.
 
 **IMPORTANT - Distinguish Discussed vs Implemented:**
 - Mark patterns that were DISCUSSED but may not have been IMPLEMENTED with "(discussed)"
@@ -460,9 +481,13 @@ Non-obvious behaviors, edge cases, or quirks discovered.
 - For PR reviews, assume code was DISCUSSED unless you see explicit merge confirmation
 - Example: "ApiError factory methods (discussed)" vs "FileUploadFilterProvider (implemented)"
 
-Be specific and actionable. Include file paths and code snippets when relevant.
-Skip trivial items. Focus on lessons that would genuinely help future sessions.
-If a section has no items, write "None" for that section."""
+**Quality Guidelines:**
+- Be specific and actionable - vague lessons aren't useful
+- Include file paths and code snippets when relevant
+- Skip trivial items - focus on lessons that would genuinely save time in future sessions
+- Prefer concrete examples over abstract descriptions
+- Note the impact: Did this bug waste hours? Is this pattern used everywhere?
+- If a section has no items, write "None" for that section."""
 
 
 def extract_single_lesson(conversation_path: Path, output_path: Path) -> tuple[Path, bool, str]:
@@ -628,14 +653,50 @@ def build_opus_system_prompt(primary_dirs: list[Path], related_dirs: list[Path],
 
 Lessons have been pre-extracted and are available at: {temp_dir}/lessons/
 
+### Step 1: Context Priming (CRITICAL - Do This First)
+Before making ANY documentation changes, understand what already exists:
+
+For EACH primary project:
+1. Read CLAUDE.md to understand current structure and conventions
+2. List all files in docs/ folder: `Glob("docs/*.md")`
+3. If there are MORE than 5 docs, spawn a Task subagent to summarize them:
+   - Use subagent_type="Explore" with prompt: "Read all docs/*.md files and provide a summary of what each doc covers, its structure, and any conventions used"
+4. If there are 5 or fewer docs, read them directly
+5. Note: What topics are already documented? What's the writing style? Any existing "Common Gotchas" section?
+
+This priming ensures new content fits with existing documentation rather than duplicating or conflicting.
+
+### Step 2: Read and Analyze Lessons
 1. Read all lesson files from {temp_dir}/lessons/
-2. For EACH primary project:
-   a. Read its current CLAUDE.md (if exists)
-   b. Read its codebase structure (use Glob/Read)
-   c. Synthesize relevant lessons into documentation updates
-   d. Use Write or Edit tools to update CLAUDE.md directly
-   e. Create/update docs/ folder with detailed documentation
-   f. If there are "Unfixed Bugs" in any lessons, create/update BUG_REPORTS.md
+2. Build a mental model of what was worked on:
+   - Note the "Session Summary" sections - what tasks were completed?
+   - Note "Key files modified" - these may trigger doc reviews
+   - Look for "Documentation Impact" sections - these flag potential doc updates
+3. **Identify recurring issues**: If the same mistake/gotcha appears in multiple lessons, it's HIGH PRIORITY for documentation
+
+### Step 3: Check Documentation Staleness
+Before adding new content, check if existing docs need updates based on what was worked on:
+
+1. Collect all "Key files modified" paths from lesson summaries
+2. For each unique file path, grep docs/ to see if any docs reference it:
+   ```
+   Grep("filename.js", path="docs/")
+   ```
+3. If a doc references a heavily-modified file:
+   - Read that doc section
+   - Check if the content is still accurate given the changes
+   - Update stale content or add notes about new behavior
+4. Check "Documentation Impact" sections in lessons for explicit flags
+
+This ensures existing documentation stays accurate, not just that new lessons are added.
+
+### Step 4: Synthesize into Documentation
+For EACH primary project:
+   a. Match lessons to existing documentation structure
+   b. **Prioritize recurring issues** - problems that appear in multiple sessions go in CLAUDE.md
+   c. Update existing docs with new patterns/gotchas (prefer updating over creating)
+   d. Create new docs only when topic doesn't fit anywhere and has 3+ lessons
+   e. If there are verified "Unfixed Bugs", create/update BUG_REPORTS.md
 
 **Multi-Project Rules:**
 - Projects are inter-related and share context
@@ -669,44 +730,48 @@ When synthesizing lessons into CLAUDE.md or docs/:
 6. Specific file path references need validation (they're about implementation)
 7. When in doubt, EXCLUDE - validation cannot add content, only remove it
 
-**docs/ folder:**
-Create the docs/ folder if it doesn't exist. Use it for detailed documentation that doesn't fit in CLAUDE.md:
-- **PREFER updating existing docs** over creating new ones - check what already exists first!
-- Merge related lessons into existing docs (e.g., database lessons → database-patterns.md)
-- Create new docs only when:
-  * No existing doc covers the topic
-  * A domain/topic has 5+ substantial lessons (e.g., payments-troubleshooting.md)
-  * The content would make an existing doc too long or unfocused
-- Good candidates for docs/:
-  * Architecture overviews (architecture.md)
-  * Domain-specific troubleshooting guides when many lessons exist for that domain
-  * Complex subsystem guides (e.g., parsing.md, state-management.md)
-  * Setup/configuration guides (setup.md)
-- Keep lessons-learned.md for **cross-cutting concerns** that don't fit elsewhere:
-  * General patterns (validation, authorization, deployment)
-  * Gotchas that span multiple domains
-  * Quick reference rules
-- Name files descriptively in lowercase-kebab-case.md
-- Each doc should be self-contained but can reference others
-- Remove docs that are completely obsolete
+**Documentation Best Practices:**
 
-**docs/ index in CLAUDE.md:**
-At the end of CLAUDE.md, include a "## Documentation Index" section as a markdown table:
+*Single Source of Truth:*
+- Each piece of information should live in ONE place
+- Before adding content, check if it already exists (use Grep on docs/)
+- If content exists elsewhere, either reference it or consolidate (don't duplicate)
+- CLAUDE.md is for quick reference; docs/ is for detailed explanations
 
+*Topic-Focused Documentation:*
+- Each doc file should have a clear, focused purpose
+- **DO NOT create catch-all files** like "lessons-learned.md" or "misc-notes.md" - they become dumping grounds
+- Instead, create focused docs: "troubleshooting-auth.md", "database-patterns.md", "api-conventions.md"
+- If a topic doesn't fit existing docs and isn't substantial enough for its own file, add to CLAUDE.md
+
+*When to Create New Docs:*
+- A topic has 3+ substantial lessons that don't fit existing docs
+- The content would make an existing doc too long (>500 lines) or unfocused
+- The topic is important enough to warrant dedicated documentation
+- PREFER updating existing docs over creating new ones
+
+*Writing Quality Documentation:*
+- Start with a brief overview (1-2 sentences explaining purpose)
+- Use clear headers and hierarchical structure
+- Include concrete code examples, not just descriptions
+- Add "When to use" context - help readers know if this doc is relevant
+- Keep language direct and scannable (bullets > paragraphs)
+- Include file paths and line numbers for code-specific guidance
+
+*CLAUDE.md vs docs/:*
+- CLAUDE.md: Quick reference, conventions, common gotchas (aim for ~100-300 lines)
+- docs/: Detailed guides, architecture, troubleshooting, domain-specific patterns
+- Don't put the same content in both - pick one location
+
+*Documentation Index:*
+At the end of CLAUDE.md, maintain a "## Documentation Index" table:
 ```markdown
-## Documentation Index
-
 | Doc File | When to Read |
 |----------|--------------|
 | `docs/architecture.md` | Before making structural changes |
-| `docs/parsing.md` | Working on JSONL parser or format_jsonl.py |
-| `docs/troubleshooting.md` | Debugging unexpected behavior |
+| `docs/database.md` | Working with database queries or schema |
 ```
-
-- Use table format for scannability
-- "When to Read" column helps future sessions know which docs to load for specific tasks
-- Keep descriptions concise (one line each)
-- Reference specific features, domains, or task types
+The "When to Read" column helps future sessions know which docs to load for specific tasks.
 
 **BUG_REPORTS.md:**
 If any lessons contain "Unfixed Bugs" sections, create or update BUG_REPORTS.md in the project root:
@@ -715,19 +780,27 @@ If any lessons contain "Unfixed Bugs" sections, create or update BUG_REPORTS.md 
 - Include: description, context, potential fix (if known), which conversation it was found in
 - Format as a checklist so bugs can be tracked
 
-**CRITICAL - File Path Validation for BUG_REPORTS.md:**
-Before adding ANY bug to BUG_REPORTS.md, you MUST verify that the referenced file paths actually exist in the current codebase:
-1. Use Glob or Read to check if the file exists (e.g., `Glob("**/SSOLogin.cs")`)
-2. If the file does NOT exist, DO NOT add that bug - it may be from:
-   - An unmerged PR that was reviewed but never merged
-   - Code that was later deleted or refactored
-   - A different branch that isn't the current one
-3. If you're unsure, err on the side of NOT including the bug
-4. This is especially important for bugs from "PR review" or "code review" sessions - that code may never have been merged
+**CRITICAL - Bug Verification Before Adding:**
+Before adding ANY bug to BUG_REPORTS.md, you MUST verify:
 
-Example validation:
-- Bug references "AuthService.cs:54" → Run `Glob("**/AuthService.cs")` → If "No files found", skip this bug
-- Bug references "OrderHandler.cs:176" → Run `Glob("**/OrderHandler.cs")` → If file exists, include it
+1. **File path exists:** Use Glob or Read to check if the referenced file exists
+   - If the file does NOT exist, skip the bug (may be from unmerged PR or deleted code)
+
+2. **Bug has NOT been fixed:** Read the actual code to verify the bug still exists:
+   - Use Grep to find the relevant function/section mentioned in the bug
+   - Read that code section carefully
+   - Check if the problematic pattern described in the bug is still present
+   - Look for fix indicators: proper cleanup code, dispose functions, null checks, etc.
+   - If the code no longer matches the bug description, SKIP it
+
+3. **Err on the side of NOT including** - false positives (reporting fixed bugs) are worse than false negatives
+
+Example validation workflow:
+- Bug: "Memory leak in click-outside handler in template-renderer.js"
+- Step 1: `Glob("**/template-renderer.js")` → File exists ✓
+- Step 2: `Grep("click.*outside|setupClickOutside")` → Find the handler function
+- Step 3: Read that section → Look for: Does it have a dispose function? Does it clean up listeners?
+- Step 4: If code shows proper cleanup (effects.push with dispose, removeEventListener), the bug is FIXED - do not add
 
 ## Validation Step
 
@@ -774,7 +847,10 @@ Project directory: PROJECT_DIR
 - [ ] Every class name mentioned → Grep to verify exists
 - [ ] Every method/function mentioned → Grep to verify exists
 - [ ] Code examples → Verify the patterns match actual code
-- [ ] BUG_REPORTS.md entries → Verify referenced files exist
+- [ ] BUG_REPORTS.md entries → Verify referenced files exist AND bugs aren't already fixed
+  - Read the actual code where the bug is reported
+  - Check if the problematic pattern still exists or if there's proper cleanup/fix code
+  - Remove bugs that have been fixed
 
 ## Output:
 Print a validation report:
@@ -789,15 +865,30 @@ Wait for all validation subagents to complete before proceeding to Final Output.
 ## Final Output
 
 After validation is complete, print a summary:
+
+**Sessions Analyzed:**
 - Number of lessons processed
+- Brief list of what was worked on (from Session Summaries)
+
+**Recurring Issues Found:**
+- List any mistakes/gotchas that appeared in multiple sessions (these are high-value additions)
+
+**Documentation Staleness:**
+- Docs that were reviewed because they reference modified files
+- Updates made to existing docs (content that was stale)
+
+**New Content Added:**
 - Changes made to each project's CLAUDE.md
 - New/updated docs in docs/ folder
 - Number of unfixed bugs added to BUG_REPORTS.md
-- Any rules that were removed/modified (with reasons)
-- **Validation results** - Summary from validation step:
-  * References that were verified
-  * Content that was removed (couldn't verify)
-  * Content that was rewritten (to match actual code)
+
+**Rules Changed:**
+- Any existing rules that were removed/modified (with reasons)
+
+**Validation Results:**
+- References that were verified
+- Content that was removed (couldn't verify)
+- Content that was rewritten (to match actual code)
 """
 
 
