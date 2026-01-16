@@ -65,7 +65,7 @@ def load_state() -> dict:
     """Load dream state from disk."""
     if DREAM_STATE_PATH.exists():
         try:
-            with open(DREAM_STATE_PATH, 'r') as f:
+            with open(DREAM_STATE_PATH, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except (json.JSONDecodeError, IOError):
             return {"version": 1, "projects": {}}
@@ -76,7 +76,7 @@ def save_state(state: dict):
     """Save dream state to disk."""
     DREAM_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     state['last_run'] = datetime.now().isoformat()
-    with open(DREAM_STATE_PATH, 'w') as f:
+    with open(DREAM_STATE_PATH, 'w', encoding='utf-8') as f:
         json.dump(state, f, indent=2)
 
 
@@ -124,7 +124,7 @@ def load_cached_lessons(project_dirs: list[Path]) -> list[Path] | None:
         return None
 
     try:
-        with open(metadata_path) as f:
+        with open(metadata_path, encoding='utf-8') as f:
             metadata = json.load(f)
 
         # Verify projects match
@@ -164,7 +164,7 @@ def save_lessons_cache(project_dirs: list[Path], lessons_dir: Path):
         'created_at': datetime.now().isoformat(),
         'lesson_count': len(list(lessons_dir.glob("*.md")))
     }
-    with open(cache_dir / '_metadata.json', 'w') as f:
+    with open(cache_dir / '_metadata.json', 'w', encoding='utf-8') as f:
         json.dump(metadata, f, indent=2)
 
     console.print(f"[dim]Cached lessons to {cache_dir}[/dim]")
@@ -193,7 +193,7 @@ def has_conversation_content(jsonl_path: Path, min_user_chars: int = 100) -> boo
     has_assistant_content = False
 
     try:
-        with open(jsonl_path, 'r') as f:
+        with open(jsonl_path, 'r', encoding='utf-8') as f:
             for line in f:
                 if not line.strip():
                     continue

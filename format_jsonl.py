@@ -478,7 +478,7 @@ def parse_entries(input_path):
     current_plan_content = None
 
     # First pass: collect plan timeline with approval status
-    with open(input_path, 'r') as f:
+    with open(input_path, 'r', encoding='utf-8') as f:
         for line_num, line in enumerate(f):
             line = line.strip()
             if not line:
@@ -545,7 +545,7 @@ def parse_entries(input_path):
 
     # Second pass: full parsing
     current_plan_content = None
-    with open(input_path, 'r') as f:
+    with open(input_path, 'r', encoding='utf-8') as f:
         for line_num, line in enumerate(f):
             line = line.strip()
             if not line:
@@ -1149,7 +1149,7 @@ def format_jsonl(input_path, output_path=None, show_tools=False, show_thinking=F
     result = add_navigation_links(result, exit_plan_modes, user_has_plan)
 
     if output_path:
-        with open(output_path, 'w') as f:
+        with open(output_path, 'w', encoding='utf-8') as f:
             f.write(result)
         print(f"Output written to: {output_path}", file=sys.stderr)
     else:

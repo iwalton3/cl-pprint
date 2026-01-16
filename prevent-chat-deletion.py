@@ -9,7 +9,7 @@ def main():
 
     # Load existing settings or start fresh
     if os.path.exists(settings_path):
-        with open(settings_path, "r") as f:
+        with open(settings_path, "r", encoding='utf-8') as f:
             settings = json.load(f)
     else:
         os.makedirs(os.path.dirname(settings_path), exist_ok=True)
@@ -19,7 +19,7 @@ def main():
     settings["cleanupPeriodDays"] = 99999
 
     # Write back
-    with open(settings_path, "w") as f:
+    with open(settings_path, "w", encoding='utf-8') as f:
         json.dump(settings, f, indent=2)
 
     print(f"Updated {settings_path}")

@@ -43,7 +43,7 @@ def load_config() -> dict:
 
     if CONFIG_PATH.exists():
         try:
-            with open(CONFIG_PATH, 'r') as f:
+            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
                 user_config = json.load(f)
 
             # Deep merge user config into defaults

@@ -69,3 +69,31 @@ Windows users can manually set correct paths in `config.json`:
 - Windows: `%APPDATA%` (typically `C:\Users\<username>\AppData\Roaming`)
 - macOS: `~/Library/Application Support` or `~/.appname`
 - Linux: `~/.appname`
+
+---
+
+## Windows UTF-8 Encoding (FIXED)
+
+**Severity**: High - Prevented file reading on Windows
+**Status**: Fixed
+**Found in**: Beta tester report (2025-01)
+
+### Description
+
+Windows uses `charmap` (cp1252) as the default encoding when opening files, not UTF-8. JSONL files with non-ASCII characters caused errors:
+
+```
+'charmap' codec can't decode byte 0x8f in position 4810: character maps to <undefined>
+```
+
+### Fix Applied
+
+Added explicit `encoding='utf-8'` to all file open() calls in:
+- `format_jsonl.py` (3 locations)
+- `browse_transcripts.py` (2 locations)
+- `browse_web.py` (2 locations)
+- `summarize_transcripts.py` (3 locations)
+- `summarize_transcripts_claude.py` (3 locations)
+- `cl_dream.py` (5 locations)
+- `config.py` (1 location)
+- `prevent-chat-deletion.py` (2 locations)

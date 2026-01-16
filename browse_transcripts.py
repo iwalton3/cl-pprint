@@ -97,7 +97,7 @@ class TranscriptInfo:
         self.file_size = self.path.stat().st_size
 
         try:
-            with open(self.path, 'r') as f:
+            with open(self.path, 'r', encoding='utf-8') as f:
                 first_user_msg = None
                 session_summary = None  # Fallback from compacted sessions
                 last_timestamp = None
@@ -238,7 +238,7 @@ def load_summaries() -> dict:
     """Load cached summaries from disk."""
     if SUMMARY_CACHE_PATH.exists():
         try:
-            with open(SUMMARY_CACHE_PATH, 'r') as f:
+            with open(SUMMARY_CACHE_PATH, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except (json.JSONDecodeError, IOError):
             return {}

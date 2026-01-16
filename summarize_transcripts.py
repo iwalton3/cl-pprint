@@ -48,7 +48,7 @@ def load_cache() -> dict:
     """Load existing summaries from cache."""
     if SUMMARY_CACHE_PATH.exists():
         try:
-            with open(SUMMARY_CACHE_PATH, 'r') as f:
+            with open(SUMMARY_CACHE_PATH, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except (json.JSONDecodeError, IOError):
             return {}
@@ -58,7 +58,7 @@ def load_cache() -> dict:
 def save_cache(cache: dict):
     """Save summaries to cache file."""
     SUMMARY_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(SUMMARY_CACHE_PATH, 'w') as f:
+    with open(SUMMARY_CACHE_PATH, 'w', encoding='utf-8') as f:
         json.dump(cache, f, indent=2)
 
 
@@ -95,7 +95,7 @@ def extract_user_messages(jsonl_path: Path) -> list[str]:
     is_first_user_msg = True
 
     try:
-        with open(jsonl_path, 'r') as f:
+        with open(jsonl_path, 'r', encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
                 if not line:
