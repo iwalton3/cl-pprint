@@ -24,6 +24,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -50,6 +51,10 @@ LESSONS_CACHE_DIR = Path.home() / '.claude' / 'dream_lessons'
 
 # Timeouts
 OPUS_TIMEOUT = config.get('dream.opus_timeout') or 1800  # 30 minutes for interactive session
+EXTRACTION_TIMEOUT = config.get('dream.extraction_timeout') or 300  # 5 minutes per conversation
+
+# Parallelism
+MAX_PARALLEL_EXTRACTIONS = config.get('dream.max_parallel_extractions') or 5
 
 
 # =============================================================================
@@ -404,6 +409,161 @@ def generate_full_markdown(jsonl_path: Path, output_path: Path):
 
 
 # =============================================================================
+# Parallel Lesson Extraction
+# =============================================================================
+
+LESSON_EXTRACTION_PROMPT = """Read the conversation transcript and extract lessons learned.
+
+Output a markdown document with these sections:
+
+## Session Type
+Indicate the session type:
+- `Development` - Normal coding/implementation session
+- `PR Review` - Reviewing a pull request (look for: "gh pr", "PR #", "review", "pull request")
+- `Bug Investigation` - Investigating/debugging an issue
+- `Research` - Exploring/understanding code without changes
+
+## Mistakes Made
+Errors that were caught and corrected during the session.
+- What went wrong
+- How it was fixed
+
+## Unfixed Bugs
+Issues identified but NOT resolved by the end of the session.
+- What the bug is
+- Why it wasn't fixed (ran out of time, deferred, etc.)
+- Potential fix if known
+
+If this appears to be a PR review session, add at the top:
+"⚠️ UNMERGED CODE WARNING: These bugs were identified during a PR review. The code may not have been merged. Verify file paths exist before acting on these."
+
+## Solutions Discovered
+Successful approaches that worked well.
+- The problem
+- The solution
+- Why it works
+
+## Patterns Identified
+Useful coding patterns, conventions, or architectural decisions.
+- Pattern name/description
+- When to use it
+- Example if applicable
+
+## Gotchas
+Non-obvious behaviors, edge cases, or quirks discovered.
+- The gotcha
+- When it's relevant
+
+**IMPORTANT - Distinguish Discussed vs Implemented:**
+- Mark patterns that were DISCUSSED but may not have been IMPLEMENTED with "(discussed)"
+- Mark patterns that were CLEARLY IMPLEMENTED (you see the actual code written) with "(implemented)"
+- For PR reviews, assume code was DISCUSSED unless you see explicit merge confirmation
+- Example: "ApiError factory methods (discussed)" vs "FileUploadFilterProvider (implemented)"
+
+Be specific and actionable. Include file paths and code snippets when relevant.
+Skip trivial items. Focus on lessons that would genuinely help future sessions.
+If a section has no items, write "None" for that section."""
+
+
+def extract_single_lesson(conversation_path: Path, output_path: Path) -> tuple[Path, bool, str]:
+    """Extract lessons from a single conversation using Sonnet.
+
+    Returns (conversation_path, success, error_message)
+    """
+    try:
+        # Read the conversation content
+        conversation_content = conversation_path.read_text()
+
+        # Build the prompt
+        prompt = f"{LESSON_EXTRACTION_PROMPT}\n\n---\n\nConversation transcript:\n\n{conversation_content}"
+
+        cmd = [
+            'claude',
+            '--print',
+            '--model', 'sonnet',
+            '--output-format', 'text',
+        ]
+
+        result = subprocess.run(
+            cmd,
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=EXTRACTION_TIMEOUT,
+        )
+
+        if result.returncode == 0 and result.stdout.strip():
+            output_path.write_text(result.stdout)
+            return (conversation_path, True, "")
+        else:
+            error = result.stderr or "Empty output"
+            return (conversation_path, False, error)
+
+    except subprocess.TimeoutExpired:
+        return (conversation_path, False, f"Timeout after {EXTRACTION_TIMEOUT}s")
+    except Exception as e:
+        return (conversation_path, False, str(e))
+
+
+def extract_lessons_parallel(conversations_dir: Path, lessons_dir: Path,
+                              max_workers: int = None) -> tuple[int, int]:
+    """Extract lessons from all conversations in parallel.
+
+    Args:
+        conversations_dir: Directory containing conversation markdown files
+        lessons_dir: Directory to write lesson files to
+        max_workers: Max parallel extractions (default: MAX_PARALLEL_EXTRACTIONS)
+
+    Returns:
+        (success_count, failure_count)
+    """
+    if max_workers is None:
+        max_workers = MAX_PARALLEL_EXTRACTIONS
+
+    conversation_files = list(conversations_dir.glob("*.md"))
+    if not conversation_files:
+        console.print("[yellow]No conversation files found[/yellow]")
+        return (0, 0)
+
+    success_count = 0
+    failure_count = 0
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=console
+    ) as progress:
+        task = progress.add_task("Extracting lessons", total=len(conversation_files))
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all extraction tasks
+            futures = {}
+            for conv_path in conversation_files:
+                output_path = lessons_dir / conv_path.name
+                future = executor.submit(extract_single_lesson, conv_path, output_path)
+                futures[future] = conv_path
+
+            # Process results as they complete
+            for future in as_completed(futures):
+                conv_path = futures[future]
+                conv_path, success, error = future.result()
+
+                if success:
+                    success_count += 1
+                    progress.update(task, advance=1,
+                                    description=f"[green]✓[/green] {conv_path.stem[:30]}...")
+                else:
+                    failure_count += 1
+                    progress.update(task, advance=1,
+                                    description=f"[red]✗[/red] {conv_path.stem[:30]}...")
+                    console.print(f"[red]  Failed {conv_path.name}: {error}[/red]")
+
+    return (success_count, failure_count)
+
+
+# =============================================================================
 # Git Integration
 # =============================================================================
 
@@ -446,91 +606,11 @@ def smart_backup(file_path: Path) -> Path | None:
 # =============================================================================
 
 def build_opus_system_prompt(primary_dirs: list[Path], related_dirs: list[Path],
-                              temp_dir: Path, use_cached_lessons: bool) -> str:
-    """Build the system prompt for Opus."""
+                              temp_dir: Path) -> str:
+    """Build the system prompt for Opus synthesis phase."""
 
     primary_list = '\n'.join(f"  - {p}" for p in primary_dirs)
     related_list = '\n'.join(f"  - {p}" for p in related_dirs) if related_dirs else "  (none)"
-
-    lesson_extraction_instructions = ""
-    if not use_cached_lessons:
-        lesson_extraction_instructions = f"""
-## Phase 1: Lesson Extraction
-
-You have conversation transcripts in: {temp_dir}/conversations/
-
-First, list the conversation files using Glob to see what's available.
-
-Then, for each conversation file, launch a Task subagent to extract lessons:
-- Use subagent_type="general-purpose" and model="sonnet"
-- Process conversations in SEQUENTIAL BATCHES of 3-5 at a time
-- Wait for each batch to fully complete before launching the next batch
-- Do NOT launch all subagents at once - the completion notifications will interleave and cause issues
-
-For each subagent, construct a prompt like this (replace CONVERSATION_PATH and OUTPUT_PATH with actual paths):
-
----
-Read the conversation transcript and extract lessons learned.
-
-Conversation file: CONVERSATION_PATH
-
-Output a markdown document with these sections:
-
-## Mistakes Made
-Errors that were caught and corrected during the session.
-- What went wrong
-- How it was fixed
-
-## Unfixed Bugs
-Issues identified but NOT resolved by the end of the session.
-- What the bug is
-- Why it wasn't fixed (ran out of time, deferred, etc.)
-- Potential fix if known
-
-## Solutions Discovered
-Successful approaches that worked well.
-- The problem
-- The solution
-- Why it works
-
-## Patterns Identified
-Useful coding patterns, conventions, or architectural decisions.
-- Pattern name/description
-- When to use it
-- Example if applicable
-
-## Gotchas
-Non-obvious behaviors, edge cases, or quirks discovered.
-- The gotcha
-- When it's relevant
-
-Be specific and actionable. Include file paths and code snippets when relevant.
-Skip trivial items. Focus on lessons that would genuinely help future sessions.
-
-**IMPORTANT - Distinguish Discussed vs Implemented:**
-- Mark patterns that were DISCUSSED but may not have been IMPLEMENTED with "(discussed)"
-- Mark patterns that were CLEARLY IMPLEMENTED (you see the actual code written) with "(implemented)"
-- For PR reviews, assume code was DISCUSSED unless you see explicit merge confirmation
-- Example: "ApiError factory methods (discussed)" vs "FileUploadFilterProvider (implemented)"
-
-**Session Type Detection:**
-At the TOP of your output, add a "Session Type" line indicating if this appears to be:
-- `Session Type: Development` - Normal coding/implementation session
-- `Session Type: PR Review` - Reviewing a pull request (look for: "gh pr", "PR #", "review", "pull request")
-- `Session Type: Bug Investigation` - Investigating/debugging an issue
-- `Session Type: Research` - Exploring/understanding code without changes
-
-If the session appears to be a PR review, add a warning at the top of the Unfixed Bugs section:
-"⚠️ UNMERGED CODE WARNING: These bugs were identified during a PR review. The code may not have been merged. Verify file paths exist before acting on these."
-
-Write your output to: OUTPUT_PATH
----
-
-Output paths should be: {temp_dir}/lessons/{{conversation-filename}}.md
-
-IMPORTANT: After EACH BATCH completes, verify the lesson files were written by listing {temp_dir}/lessons/.
-Only proceed to Phase 2 after ALL batches are done and ALL expected lesson files exist.
-"""
 
     return f"""You are cl-dream, helping Claude Code learn from past conversations.
 
@@ -543,10 +623,10 @@ Only proceed to Phase 2 after ALL batches are done and ALL expected lesson files
 {related_list}
 
 **Temp directory**: {temp_dir}
-{lesson_extraction_instructions}
-## Phase 2: Documentation Update
 
-After lessons are extracted (or if using cached lessons from {temp_dir}/lessons/):
+## Your Task: Documentation Update
+
+Lessons have been pre-extracted and are available at: {temp_dir}/lessons/
 
 1. Read all lesson files from {temp_dir}/lessons/
 2. For EACH primary project:
@@ -581,13 +661,13 @@ After lessons are extracted (or if using cached lessons from {temp_dir}/lessons/
 When synthesizing lessons into CLAUDE.md or docs/:
 1. Check "Session Type" tags in lesson files - be cautious with "PR Review" sessions
 2. Look for "(discussed)" vs "(implemented)" markers:
-   - "(implemented)" items → Include, but Phase 3 will verify
+   - "(implemented)" items → Include, validation step will verify
    - "(discussed)" items → SKIP unless you verify the code exists first
 3. If a lesson references specific file paths, spot-check that key files exist
 4. Skip lessons that reference patterns/code that clearly don't exist in the codebase
 5. Patterns and gotchas are usually safe to include (they're about concepts)
 6. Specific file path references need validation (they're about implementation)
-7. When in doubt, EXCLUDE - Phase 3 validation cannot add content, only remove it
+7. When in doubt, EXCLUDE - validation cannot add content, only remove it
 
 **docs/ folder:**
 Create the docs/ folder if it doesn't exist. Use it for detailed documentation that doesn't fit in CLAUDE.md:
@@ -649,7 +729,7 @@ Example validation:
 - Bug references "AuthService.cs:54" → Run `Glob("**/AuthService.cs")` → If "No files found", skip this bug
 - Bug references "OrderHandler.cs:176" → Run `Glob("**/OrderHandler.cs")` → If file exists, include it
 
-## Phase 3: Documentation Validation
+## Validation Step
 
 After updating documentation, launch an INDEPENDENT validation subagent for EACH primary project.
 
@@ -714,7 +794,7 @@ After validation is complete, print a summary:
 - New/updated docs in docs/ folder
 - Number of unfixed bugs added to BUG_REPORTS.md
 - Any rules that were removed/modified (with reasons)
-- **Validation results** - Summary from Phase 3:
+- **Validation results** - Summary from validation step:
   * References that were verified
   * Content that was removed (couldn't verify)
   * Content that was rewritten (to match actual code)
@@ -722,33 +802,22 @@ After validation is complete, print a summary:
 
 
 def run_opus_interactive(primary_dirs: list[Path], related_dirs: list[Path],
-                         temp_dir: Path, use_cached_lessons: bool,
-                         dry_run: bool = False) -> bool:
-    """Run Opus interactively with tool access and streaming output.
+                         temp_dir: Path, dry_run: bool = False) -> bool:
+    """Run Opus for documentation synthesis with tool access and streaming output.
 
     Opus will:
-    1. (unless cached) Launch parallel Task subagents to extract lessons
-    2. Directly edit CLAUDE.md using Write/Edit tools
-    3. Stream output to terminal
+    1. Read pre-extracted lessons from temp_dir/lessons/
+    2. Synthesize lessons into CLAUDE.md updates using Write/Edit tools
+    3. Launch validation subagents
+    4. Stream output to terminal
     """
-    system_prompt = build_opus_system_prompt(primary_dirs, related_dirs, temp_dir, use_cached_lessons)
+    system_prompt = build_opus_system_prompt(primary_dirs, related_dirs, temp_dir)
 
-    # Build user prompt - start with text that won't be interpreted as a path
-    if use_cached_lessons:
-        user_prompt = f"""Please proceed with the cl-dream workflow.
+    user_prompt = f"""Please proceed with the cl-dream workflow.
 
-Cached lessons are available at: {temp_dir}/lessons/
+Lessons have been pre-extracted and are available at: {temp_dir}/lessons/
 
-Skip Phase 1 (lesson extraction) and proceed directly to Phase 2: Documentation Update.
-
-Read the lesson files and update CLAUDE.md for each primary project."""
-    else:
-        user_prompt = f"""Please proceed with the cl-dream workflow.
-
-Conversation transcripts are located at: {temp_dir}/conversations/
-
-Begin Phase 1: Launch parallel Task subagents to extract lessons from each conversation.
-Then proceed to Phase 2: Update CLAUDE.md for each primary project."""
+Read the lesson files and update CLAUDE.md for each primary project, then run validation."""
 
     if dry_run:
         console.print("\n[bold cyan]--- DRY RUN ---[/bold cyan]")
@@ -756,7 +825,6 @@ Then proceed to Phase 2: Update CLAUDE.md for each primary project."""
         console.print(f"  Primary dirs: {[str(p) for p in primary_dirs]}")
         console.print(f"  Related dirs: {[str(p) for p in related_dirs]}")
         console.print(f"  Temp dir: {temp_dir}")
-        console.print(f"  Use cached lessons: {use_cached_lessons}")
         console.print(f"\n[dim]System prompt preview:[/dim]")
         console.print(system_prompt[:1000] + "..." if len(system_prompt) > 1000 else system_prompt)
         return True
@@ -951,9 +1019,9 @@ Examples:
     with temp_dream_dir(keep=args.keep_temp) as temp_dir:
         console.print(f"[dim]Temp directory: {temp_dir}[/dim]\n")
 
-        # Phase 1: Generate markdown (skip if using cached lessons)
+        # Step 1: Generate markdown (skip if using cached lessons)
         if not use_cached_lessons:
-            console.print("[bold]Phase 1: Generating markdown...[/bold]")
+            console.print("[bold]Step 1: Generating markdown...[/bold]")
 
             with Progress(
                 SpinnerColumn(),
@@ -974,6 +1042,22 @@ Examples:
                     progress.update(task, advance=1, description=f"Converting {conv.stem[:20]}...")
 
             console.print(f"  Generated {len(conversation_data)} markdown files\n")
+
+            # Step 2: Extract lessons in parallel using Sonnet
+            console.print(f"[bold]Step 2: Extracting lessons (parallel, up to {MAX_PARALLEL_EXTRACTIONS} at a time)...[/bold]")
+
+            conversations_dir = temp_dir / 'conversations'
+            lessons_dir = temp_dir / 'lessons'
+
+            if args.dry_run:
+                console.print(f"[cyan]DRY RUN - would extract lessons from {len(conversation_data)} conversations[/cyan]\n")
+            else:
+                success_count, failure_count = extract_lessons_parallel(conversations_dir, lessons_dir)
+                console.print(f"  Extracted {success_count} lessons ({failure_count} failed)\n")
+
+                if success_count == 0:
+                    console.print("[red]No lessons extracted, aborting[/red]")
+                    return
         else:
             # Copy cached lessons to temp dir
             cache_dir = get_cache_dir(primary_dirs)
@@ -988,14 +1072,13 @@ Examples:
                 if claude_md.exists():
                     smart_backup(claude_md)
 
-        # Phase 2 & 3: Opus extracts lessons and updates docs
-        console.print("[bold]Running Opus for lesson extraction and documentation update...[/bold]")
+        # Step 3: Opus synthesizes lessons into documentation
+        console.print("[bold]Step 3: Running Opus for documentation synthesis...[/bold]")
 
         success = run_opus_interactive(
             primary_dirs=primary_dirs,
             related_dirs=related_dirs,
             temp_dir=temp_dir,
-            use_cached_lessons=use_cached_lessons,
             dry_run=args.dry_run
         )
 
