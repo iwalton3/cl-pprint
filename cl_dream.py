@@ -507,6 +507,7 @@ def extract_single_lesson(conversation_path: Path, output_path: Path) -> tuple[P
             '--print',
             '--model', 'sonnet',
             '--output-format', 'text',
+            '--no-session-persistence',  # Don't create history entries for lesson extraction
         ]
 
         result = subprocess.run(
