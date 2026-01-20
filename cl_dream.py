@@ -7,13 +7,17 @@ coding sessions by extracting lessons and updating project documentation.
 
 Usage:
     python cl_dream.py /path/to/project1 [/path/to/project2 ...] [options]
+    python cl_dream.py auto [options]  # Run on all previously-processed projects
+    python cl_dream.py cleanup /path/to/project [options]  # Clean up CLAUDE.md
 
 Workflow:
     1. Find new conversations (by mtime tracking)
     2. Generate markdown from JSONL logs
-    3. Extract lessons - Opus launches parallel Sonnet subagents
+    3. Extract lessons - parallel Sonnet subprocesses
     4. Synthesize - Opus directly edits CLAUDE.md using tools
-    5. Cache lessons, update state
+    5. Generate conversation summaries for browser
+    6. (Optional) Clean up CLAUDE.md - remove stale/one-off content
+    7. Cache lessons, update state
 """
 
 import argparse
@@ -48,6 +52,9 @@ if isinstance(DREAM_STATE_PATH, str):
 
 # Lessons cache
 LESSONS_CACHE_DIR = Path.home() / '.claude' / 'dream_lessons'
+
+# Summary cache (same as summarize_transcripts.py uses)
+SUMMARY_CACHE_PATH = config.get_path('summary_cache') or Path.home() / '.claude' / 'transcript_summaries.json'
 
 # Timeouts
 OPUS_TIMEOUT = config.get('dream.opus_timeout') or 1800  # 30 minutes for interactive session
@@ -95,6 +102,21 @@ def mark_processed(state: dict, project_dir: str, session_id: str, mtime: float)
 
     state['projects'][project_dir]['processed_sessions'][session_id] = mtime
     state['projects'][project_dir]['last_processed'] = datetime.now().isoformat()
+
+
+def discover_auto_projects(state: dict) -> list[Path]:
+    """Discover projects where cl_dream was previously run.
+
+    Returns only projects that still exist on disk.
+    """
+    projects = []
+    for project_path_str in state.get('projects', {}).keys():
+        project_path = Path(project_path_str)
+        if project_path.exists() and project_path.is_dir():
+            projects.append(project_path)
+        else:
+            console.print(f"[dim]Skipping non-existent: {project_path_str}[/dim]")
+    return projects
 
 
 # =============================================================================
@@ -590,6 +612,198 @@ def extract_lessons_parallel(conversations_dir: Path, lessons_dir: Path,
 
 
 # =============================================================================
+# Summary Generation (for conversation browser)
+# =============================================================================
+
+SUMMARY_GENERATION_PROMPT = """Analyze this conversation and return a JSON object with:
+- "summary": A 1-2 sentence description of what the user was working on
+- "filename": A short kebab-case name (3-5 words, like "fix-docker-build" or "add-dark-mode")
+
+Focus on the USER'S INTENT, not the assistant's responses. Be concise and specific.
+
+Conversation excerpt:
+{conversation_excerpt}
+
+Return ONLY valid JSON, no other text."""
+
+
+def extract_conversation_excerpt(jsonl_path: Path, max_chars: int = 3000) -> str:
+    """Extract user messages for summary generation."""
+    messages = []
+    total_chars = 0
+
+    try:
+        with open(jsonl_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    entry = json.loads(line)
+                    if entry.get('type') == 'user':
+                        msg = entry.get('message', {})
+                        content = msg.get('content', '')
+
+                        text = None
+                        if isinstance(content, str):
+                            text = content
+                        elif isinstance(content, list):
+                            texts = []
+                            for item in content:
+                                if isinstance(item, dict) and item.get('type') == 'text':
+                                    texts.append(item.get('text', ''))
+                            text = ' '.join(texts)
+
+                        if text and not text.startswith('<command-name>'):
+                            # Clean up
+                            text = text.strip()[:500]
+                            if total_chars + len(text) > max_chars:
+                                break
+                            messages.append(f"- {text}")
+                            total_chars += len(text)
+                except json.JSONDecodeError:
+                    continue
+    except (IOError, OSError):
+        pass
+
+    return '\n'.join(messages[:10])
+
+
+def generate_single_summary(jsonl_path: Path) -> tuple[Path, dict | None, str]:
+    """Generate a summary for a single conversation using Sonnet.
+
+    Returns (jsonl_path, summary_dict, error_message)
+    """
+    try:
+        excerpt = extract_conversation_excerpt(jsonl_path)
+        if not excerpt or len(excerpt) < 50:
+            return (jsonl_path, None, "Insufficient content")
+
+        prompt = SUMMARY_GENERATION_PROMPT.format(conversation_excerpt=excerpt)
+
+        cmd = [
+            config.get_claude_cli(),
+            '--print',
+            '--model', 'haiku',  # Use Haiku for fast/cheap summaries
+            '--output-format', 'text',
+            '--no-session-persistence',
+        ]
+
+        result = subprocess.run(
+            cmd,
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=60,  # Short timeout for summaries
+        )
+
+        if result.returncode == 0 and result.stdout.strip():
+            try:
+                # Parse JSON response
+                response_text = result.stdout.strip()
+                # Handle markdown code blocks
+                if response_text.startswith('```'):
+                    response_text = response_text.split('\n', 1)[1].rsplit('```', 1)[0]
+                parsed = json.loads(response_text)
+                summary = parsed.get('summary', '').strip()
+                filename = parsed.get('filename', '').strip()
+
+                if summary and len(summary) > 10:
+                    return (jsonl_path, {
+                        'summary': summary,
+                        'filename': filename if filename else None,
+                        'generated_at': datetime.now().isoformat(),
+                        'model': 'haiku',
+                    }, "")
+            except json.JSONDecodeError:
+                # Use raw response as summary
+                if len(result.stdout.strip()) > 10:
+                    return (jsonl_path, {
+                        'summary': result.stdout.strip()[:200],
+                        'filename': None,
+                        'generated_at': datetime.now().isoformat(),
+                        'model': 'haiku',
+                    }, "")
+
+        return (jsonl_path, None, result.stderr or "Empty output")
+
+    except subprocess.TimeoutExpired:
+        return (jsonl_path, None, "Timeout")
+    except Exception as e:
+        return (jsonl_path, None, str(e))
+
+
+def load_summary_cache() -> dict:
+    """Load existing summaries from cache."""
+    if SUMMARY_CACHE_PATH.exists():
+        try:
+            with open(SUMMARY_CACHE_PATH, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            return {}
+    return {}
+
+
+def save_summary_cache(cache: dict):
+    """Save summaries to cache file."""
+    SUMMARY_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(SUMMARY_CACHE_PATH, 'w', encoding='utf-8') as f:
+        json.dump(cache, f, indent=2)
+
+
+def generate_summaries_parallel(conversations: list[tuple[Path, float, Path]],
+                                  max_workers: int = 5) -> int:
+    """Generate summaries for conversations that don't have them.
+
+    Returns count of new summaries generated.
+    """
+    cache = load_summary_cache()
+    to_process = []
+
+    for jsonl_path, mtime, source in conversations:
+        session_id = jsonl_path.stem
+        if session_id not in cache:
+            to_process.append(jsonl_path)
+
+    if not to_process:
+        console.print("[dim]All conversations already have summaries[/dim]")
+        return 0
+
+    console.print(f"Generating summaries for {len(to_process)} conversations...")
+
+    generated = 0
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=console
+    ) as progress:
+        task = progress.add_task("Summarizing", total=len(to_process))
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(generate_single_summary, p): p for p in to_process}
+
+            for future in as_completed(futures):
+                jsonl_path, summary_dict, error = future.result()
+                session_id = jsonl_path.stem
+
+                if summary_dict:
+                    cache[session_id] = summary_dict
+                    generated += 1
+                    # Save periodically
+                    if generated % 10 == 0:
+                        save_summary_cache(cache)
+
+                progress.update(task, advance=1,
+                               description=f"{jsonl_path.stem[:25]}...")
+
+    save_summary_cache(cache)
+    console.print(f"  Generated {generated} new summaries")
+    return generated
+
+
+# =============================================================================
 # Git Integration
 # =============================================================================
 
@@ -718,6 +932,38 @@ For EACH primary project:
   * Factually incorrect
   * Outdated (code they reference no longer exists)
   * Contradicted by multiple lessons
+
+**CRITICAL - What NOT to Add to CLAUDE.md:**
+
+DO NOT add these types of content - they create noise and reduce the document's usefulness:
+
+1. **One-off decisions** - Choices made for a specific feature/ticket that won't recur:
+   - "We used library X for the dashboard feature" (unless X is now a project standard)
+   - "The migration script handles edge case Y" (too specific)
+   - Anything that starts with "For this feature..." or "In this PR..."
+
+2. **Obvious things** any competent developer would know:
+   - Basic language features ("Python uses indentation for blocks")
+   - Standard library usage ("Use os.path.join for paths")
+   - Generic best practices ("Write unit tests", "Use meaningful variable names")
+   - Framework basics covered in official docs
+
+3. **Temporary information**:
+   - Workarounds for bugs that will be fixed
+   - Notes about in-progress refactoring
+   - "TODO" items (use issue tracker instead)
+
+4. **Low-impact gotchas** that don't save significant time:
+   - Minor annoyances that take <5 minutes to figure out
+   - Issues that only affect rare edge cases
+   - Problems with clear error messages that point to the solution
+
+**What SHOULD go in CLAUDE.md:**
+- Patterns that differ from common conventions (and WHY)
+- Gotchas that have wasted significant debugging time (30+ min)
+- Project-specific conventions not obvious from the code
+- Architectural decisions that affect how new code should be written
+- Integration points with external systems that have quirks
 
 **Validation Before Including Lessons:**
 When synthesizing lessons into CLAUDE.md or docs/:
@@ -1010,63 +1256,176 @@ Read the lesson files and update CLAUDE.md for each primary project, then run va
 
 
 # =============================================================================
+# CLAUDE.md Cleanup Phase
+# =============================================================================
+
+CLEANUP_SYSTEM_PROMPT = """You are a documentation quality reviewer for CLAUDE.md files.
+
+Your job is to clean up CLAUDE.md by removing content that doesn't provide lasting value.
+
+## Project Directory
+{project_dir}
+
+## What to REMOVE
+
+1. **One-off decisions** that won't recur:
+   - "We decided to use X for this specific feature" (unless it's a pattern)
+   - Temporary workarounds that have been resolved
+   - Decisions specific to a single PR or ticket
+
+2. **Obvious things** any experienced developer would know:
+   - Basic language features ("Python uses indentation")
+   - Standard library usage ("Use os.path for file paths")
+   - Generic best practices ("Write tests", "Use descriptive names")
+
+3. **Stale information**:
+   - References to files/functions that no longer exist
+   - Patterns for code that was refactored away
+   - Workarounds for bugs that were fixed
+
+4. **Redundant content**:
+   - Information duplicated in docs/ files (CLAUDE.md should reference, not repeat)
+   - Multiple entries saying the same thing in different words
+
+## What to KEEP
+
+- Project-specific conventions that aren't obvious
+- Gotchas that have bitten people multiple times
+- Patterns unique to this codebase
+- Information that would save significant debugging time
+- Cross-cutting concerns that affect many files
+
+## Your Workflow
+
+1. **Read CLAUDE.md** to understand current content
+2. **Check git history** to understand what's changed recently:
+   - `git log --oneline -20` for recent commits
+   - `git diff HEAD~20 -- CLAUDE.md` if CLAUDE.md was recently modified
+3. **Review docs/ folder** to identify duplicated content
+4. **Verify file references** - use Glob to check if referenced files exist
+5. **Edit CLAUDE.md** to remove stale/one-off/obvious content
+6. **Consolidate** remaining content for clarity
+
+## Output Format
+
+After making changes, provide a summary:
+- **Removed**: List items removed and why
+- **Kept**: Notable items that were kept
+- **Suggestions**: Any structural improvements needed
+
+Be aggressive about removing low-value content. A concise CLAUDE.md is more useful than a comprehensive one."""
+
+
+def run_cleanup_phase(project_dir: Path, dry_run: bool = False) -> bool:
+    """Run CLAUDE.md cleanup using Opus.
+
+    This phase reviews and cleans up CLAUDE.md to remove:
+    - One-off decisions unlikely to recur
+    - Obvious information
+    - Stale references to code that no longer exists
+    """
+    claude_md = project_dir / 'CLAUDE.md'
+    if not claude_md.exists():
+        console.print(f"[yellow]No CLAUDE.md found in {project_dir}[/yellow]")
+        return True
+
+    system_prompt = CLEANUP_SYSTEM_PROMPT.format(project_dir=project_dir)
+
+    user_prompt = f"""Please review and clean up CLAUDE.md in {project_dir}.
+
+Start by reading CLAUDE.md, then check git history and docs/ folder to understand context.
+Remove one-off decisions, obvious content, and stale references.
+Use the Edit tool to make changes directly."""
+
+    if dry_run:
+        console.print("\n[bold cyan]--- DRY RUN (Cleanup) ---[/bold cyan]")
+        console.print(f"Would run cleanup on: {project_dir}")
+        console.print(f"\n[dim]System prompt preview:[/dim]")
+        console.print(system_prompt[:800] + "...")
+        return True
+
+    cmd = [
+        config.get_claude_cli(),
+        '--print',
+        '--model', 'opus',
+        '--system-prompt', system_prompt,
+        '--allowedTools', 'Read,Edit,Glob,Grep,Bash',
+        '--output-format', 'stream-json',
+        '--verbose',
+        '--add-dir', str(project_dir),
+    ]
+
+    console.print(f"\n[bold]Running CLAUDE.md cleanup for {project_dir.name}...[/bold]")
+
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        process.stdin.write(user_prompt)
+        process.stdin.close()
+
+        # Stream output
+        while True:
+            if process.stdout:
+                line = process.stdout.readline()
+                if line:
+                    try:
+                        data = json.loads(line)
+                        msg_type = data.get('type', '')
+
+                        if msg_type == 'assistant' and 'message' in data:
+                            content = data['message'].get('content', [])
+                            for item in content:
+                                if isinstance(item, dict):
+                                    if item.get('type') == 'text':
+                                        text = item.get('text', '')
+                                        if text:
+                                            console.print(text)
+                                    elif item.get('type') == 'tool_use':
+                                        tool_name = item.get('name', 'unknown')
+                                        console.print(f"[dim]>>> Using tool: {tool_name}[/dim]")
+
+                        elif msg_type == 'result':
+                            if data.get('subtype') == 'success':
+                                console.print("\n[green]Cleanup completed successfully[/green]")
+                            else:
+                                console.print(f"\n[yellow]Cleanup ended: {data.get('subtype', 'unknown')}[/yellow]")
+
+                    except json.JSONDecodeError:
+                        console.print(line.rstrip())
+                elif process.poll() is not None:
+                    break
+            else:
+                break
+
+        if process.stderr:
+            stderr_output = process.stderr.read()
+            if stderr_output:
+                console.print(f"[dim]{stderr_output}[/dim]")
+
+        return process.returncode == 0
+
+    except subprocess.TimeoutExpired:
+        process.kill()
+        console.print(f"[red]Cleanup timed out[/red]")
+        return False
+    except FileNotFoundError:
+        console.print("[red]Claude CLI not found[/red]")
+        return False
+
+
+# =============================================================================
 # Main Workflow
 # =============================================================================
 
-def main():
-    parser = argparse.ArgumentParser(
-        description='Help Claude Code learn from past conversations',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-    # Single project
-    python cl_dream.py /path/to/my-project
-
-    # Multiple related projects (both get docs updated)
-    python cl_dream.py /path/to/frontend /path/to/backend
-
-    # Include conversations from shared lib without updating its docs
-    python cl_dream.py /path/to/frontend --related /path/to/shared-lib
-
-    # Retry synthesis with cached lessons
-    python cl_dream.py /path/to/project --retry
-
-    # Preview what would be done
-    python cl_dream.py . --dry-run
-        """
-    )
-    parser.add_argument('project_dirs', nargs='+', type=Path,
-                        help='Project directories to update docs for')
-    parser.add_argument('--related', nargs='*', type=Path, default=[],
-                        help='Related projects (conversations included, docs NOT updated)')
-    parser.add_argument('--force', action='store_true',
-                        help='Reprocess all conversations (ignore state)')
-    parser.add_argument('--dry-run', action='store_true',
-                        help='Show what would be done without making changes')
-    parser.add_argument('--retry', action='store_true',
-                        help='Skip lesson extraction, reuse cached lessons')
-    parser.add_argument('--keep-temp', action='store_true',
-                        help='Keep temp directory for debugging')
-
-    args = parser.parse_args()
-
-    # Validate project directories
-    primary_dirs = []
-    for p in args.project_dirs:
-        resolved = p.resolve()
-        if not resolved.exists():
-            console.print(f"[red]Error: Project directory does not exist: {resolved}[/red]")
-            sys.exit(1)
-        primary_dirs.append(resolved)
-
-    # Related dirs don't need to exist on disk - they may be old paths that were moved
-    # but Claude still has conversation logs for them
-    related_dirs = []
-    for p in args.related:
-        resolved = p.resolve()
-        related_dirs.append(resolved)
-        if not resolved.exists():
-            console.print(f"[dim]Note: Related dir {resolved} doesn't exist on disk (looking for old conversations)[/dim]")
+def run_dream_workflow(primary_dirs: list[Path], related_dirs: list[Path],
+                        force: bool, dry_run: bool, retry: bool,
+                        keep_temp: bool, skip_summaries: bool, cleanup: bool):
+    """Run the main cl-dream workflow on specified projects."""
 
     console.print(f"[bold]cl-dream[/bold] - Learning from past conversations\n")
     console.print(f"Primary projects: {[str(p) for p in primary_dirs]}")
@@ -1076,18 +1435,18 @@ Examples:
 
     # Check for --retry with cached lessons
     use_cached_lessons = False
-    if args.retry:
+    if retry:
         cached = load_cached_lessons(primary_dirs)
         if cached is None:
             console.print("[red]Error: --retry specified but no cached lessons found.[/red]")
             console.print("[yellow]Run without --retry first to generate lessons.[/yellow]")
-            sys.exit(1)
+            return False
         use_cached_lessons = True
         console.print(f"[green]Using {len(cached)} cached lessons (--retry mode)[/green]\n")
 
     # Load state
-    state = {"version": 1, "projects": {}} if args.force else load_state()
-    if args.force:
+    state = {"version": 1, "projects": {}} if force else load_state()
+    if force:
         console.print("[yellow]Force mode: reprocessing all conversations[/yellow]\n")
 
     # Find new conversations (skip if using cached lessons)
@@ -1097,18 +1456,22 @@ Examples:
 
         if not conversation_data:
             console.print("[green]No new conversations to process[/green]")
-            return
+            # Still run cleanup if requested
+            if cleanup and not dry_run:
+                for proj in primary_dirs:
+                    run_cleanup_phase(proj, dry_run)
+            return True
 
         console.print(f"Found [bold]{len(conversation_data)}[/bold] conversations to process\n")
 
-        if args.dry_run:
+        if dry_run:
             console.print("[cyan]DRY RUN - would process:[/cyan]")
             for conv, mtime, source in conversation_data:
                 mtime_str = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M')
                 console.print(f"  - {conv.name} (modified: {mtime_str}, from: {source.name})")
             console.print()
 
-    with temp_dream_dir(keep=args.keep_temp) as temp_dir:
+    with temp_dream_dir(keep=keep_temp) as temp_dir:
         console.print(f"[dim]Temp directory: {temp_dir}[/dim]\n")
 
         # Step 1: Generate markdown (skip if using cached lessons)
@@ -1141,7 +1504,7 @@ Examples:
             conversations_dir = temp_dir / 'conversations'
             lessons_dir = temp_dir / 'lessons'
 
-            if args.dry_run:
+            if dry_run:
                 console.print(f"[cyan]DRY RUN - would extract lessons from {len(conversation_data)} conversations[/cyan]\n")
             else:
                 success_count, failure_count = extract_lessons_parallel(conversations_dir, lessons_dir)
@@ -1149,7 +1512,7 @@ Examples:
 
                 if success_count == 0:
                     console.print("[red]No lessons extracted, aborting[/red]")
-                    return
+                    return False
         else:
             # Copy cached lessons to temp dir
             cache_dir = get_cache_dir(primary_dirs)
@@ -1158,7 +1521,7 @@ Examples:
             console.print(f"[dim]Copied cached lessons to temp directory[/dim]\n")
 
         # Backup CLAUDE.md files (smart backup - skip if git-tracked)
-        if not args.dry_run:
+        if not dry_run:
             for proj in primary_dirs:
                 claude_md = proj / 'CLAUDE.md'
                 if claude_md.exists():
@@ -1171,10 +1534,10 @@ Examples:
             primary_dirs=primary_dirs,
             related_dirs=related_dirs,
             temp_dir=temp_dir,
-            dry_run=args.dry_run
+            dry_run=dry_run
         )
 
-        if success and not args.dry_run:
+        if success and not dry_run:
             # Cache lessons for future --retry (unless already using cached)
             if not use_cached_lessons:
                 lessons_dir = temp_dir / 'lessons'
@@ -1190,11 +1553,173 @@ Examples:
             save_state(state)
             console.print(f"\n[green]Done! State saved to: {DREAM_STATE_PATH}[/green]")
 
-        elif not success and not args.dry_run:
+            # Step 4: Generate summaries for conversation browser
+            if not skip_summaries and conversation_data:
+                console.print("\n[bold]Step 4: Generating conversation summaries...[/bold]")
+                generate_summaries_parallel(conversation_data)
+
+            # Step 5: Optional cleanup phase
+            if cleanup:
+                console.print("\n[bold]Step 5: Running CLAUDE.md cleanup...[/bold]")
+                for proj in primary_dirs:
+                    run_cleanup_phase(proj, dry_run)
+
+        elif not success and not dry_run:
             console.print("\n[red]Opus session failed or was interrupted[/red]")
 
-        if args.keep_temp:
+        if keep_temp:
             console.print(f"\n[yellow]Temp directory kept: {temp_dir}[/yellow]")
+
+    return success
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Help Claude Code learn from past conversations',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+    # Single project
+    python cl_dream.py /path/to/my-project
+
+    # Multiple related projects (both get docs updated)
+    python cl_dream.py /path/to/frontend /path/to/backend
+
+    # Include conversations from shared lib without updating its docs
+    python cl_dream.py /path/to/frontend --related /path/to/shared-lib
+
+    # Retry synthesis with cached lessons
+    python cl_dream.py /path/to/project --retry
+
+    # Run on all previously-processed projects
+    python cl_dream.py auto
+
+    # Clean up CLAUDE.md only (no lesson extraction)
+    python cl_dream.py cleanup /path/to/project
+
+    # Preview what would be done
+    python cl_dream.py . --dry-run
+        """
+    )
+
+    # Check for subcommands
+    subparsers = parser.add_subparsers(dest='command', help='Commands')
+
+    # Auto command - run on all previously processed projects
+    auto_parser = subparsers.add_parser('auto',
+        help='Run on all previously-processed projects that still exist')
+    auto_parser.add_argument('--dry-run', action='store_true',
+                             help='Show what would be done without making changes')
+    auto_parser.add_argument('--force', action='store_true',
+                             help='Reprocess all conversations (ignore state)')
+    auto_parser.add_argument('--skip-summaries', action='store_true',
+                             help='Skip generating conversation summaries')
+    auto_parser.add_argument('--cleanup', action='store_true',
+                             help='Run CLAUDE.md cleanup phase after synthesis')
+    auto_parser.add_argument('--keep-temp', action='store_true',
+                             help='Keep temp directory for debugging')
+
+    # Cleanup command - just clean up CLAUDE.md
+    cleanup_parser = subparsers.add_parser('cleanup',
+        help='Clean up CLAUDE.md by removing stale/one-off content')
+    cleanup_parser.add_argument('project_dir', type=Path,
+                                help='Project directory to clean up')
+    cleanup_parser.add_argument('--dry-run', action='store_true',
+                                help='Show what would be done without making changes')
+
+    # Default: process specific projects
+    parser.add_argument('project_dirs', nargs='*', type=Path,
+                        help='Project directories to update docs for')
+    parser.add_argument('--related', nargs='*', type=Path, default=[],
+                        help='Related projects (conversations included, docs NOT updated)')
+    parser.add_argument('--force', action='store_true',
+                        help='Reprocess all conversations (ignore state)')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='Show what would be done without making changes')
+    parser.add_argument('--retry', action='store_true',
+                        help='Skip lesson extraction, reuse cached lessons')
+    parser.add_argument('--skip-summaries', action='store_true',
+                        help='Skip generating conversation summaries')
+    parser.add_argument('--cleanup', action='store_true',
+                        help='Run CLAUDE.md cleanup phase after synthesis')
+    parser.add_argument('--keep-temp', action='store_true',
+                        help='Keep temp directory for debugging')
+
+    args = parser.parse_args()
+
+    # Handle 'auto' command
+    if args.command == 'auto':
+        state = load_state()
+        projects = discover_auto_projects(state)
+
+        if not projects:
+            console.print("[yellow]No previously-processed projects found.[/yellow]")
+            console.print("[dim]Run cl_dream.py on a project first, then use 'auto' for incremental updates.[/dim]")
+            sys.exit(0)
+
+        console.print(f"[bold]Auto mode:[/bold] Found {len(projects)} previously-processed projects\n")
+
+        for proj in projects:
+            console.print(f"\n[bold cyan]{'='*60}[/bold cyan]")
+            console.print(f"[bold cyan]Processing: {proj}[/bold cyan]")
+            console.print(f"[bold cyan]{'='*60}[/bold cyan]\n")
+
+            run_dream_workflow(
+                primary_dirs=[proj],
+                related_dirs=[],
+                force=args.force,
+                dry_run=args.dry_run,
+                retry=False,
+                keep_temp=args.keep_temp,
+                skip_summaries=args.skip_summaries,
+                cleanup=args.cleanup,
+            )
+
+        return
+
+    # Handle 'cleanup' command
+    if args.command == 'cleanup':
+        project_dir = args.project_dir.resolve()
+        if not project_dir.exists():
+            console.print(f"[red]Error: Project directory does not exist: {project_dir}[/red]")
+            sys.exit(1)
+
+        run_cleanup_phase(project_dir, args.dry_run)
+        return
+
+    # Default: process specific projects
+    if not args.project_dirs:
+        parser.print_help()
+        sys.exit(1)
+
+    # Validate project directories
+    primary_dirs = []
+    for p in args.project_dirs:
+        resolved = p.resolve()
+        if not resolved.exists():
+            console.print(f"[red]Error: Project directory does not exist: {resolved}[/red]")
+            sys.exit(1)
+        primary_dirs.append(resolved)
+
+    # Related dirs don't need to exist on disk - they may be old paths that were moved
+    # but Claude still has conversation logs for them
+    related_dirs = []
+    for p in args.related:
+        resolved = p.resolve()
+        related_dirs.append(resolved)
+        if not resolved.exists():
+            console.print(f"[dim]Note: Related dir {resolved} doesn't exist on disk (looking for old conversations)[/dim]")
+
+    run_dream_workflow(
+        primary_dirs=primary_dirs,
+        related_dirs=related_dirs,
+        force=args.force,
+        dry_run=args.dry_run,
+        retry=args.retry,
+        keep_temp=args.keep_temp,
+        skip_summaries=args.skip_summaries,
+        cleanup=args.cleanup,
+    )
 
 
 if __name__ == '__main__':

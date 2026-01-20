@@ -40,6 +40,12 @@ python browse_web.py [--port 8080] [--no-browser]
 Extract lessons and update documentation:
 ```bash
 python cl_dream.py /path/to/project [--related /path/to/related] [--retry] [--dry-run]
+
+# Run incrementally on all previously-processed projects
+python cl_dream.py auto [--cleanup]
+
+# Clean up CLAUDE.md only (remove stale/one-off content)
+python cl_dream.py cleanup /path/to/project
 ```
 
 ## Dependencies
@@ -88,10 +94,13 @@ The `config.py` module provides `get(key)` for dot-notation access and `get_path
 - Loads `config.json` and merges with defaults
 - Provides `get()` and `get_path()` helpers
 
-**cl_dream.py** uses two-phase architecture:
+**cl_dream.py** uses multi-phase architecture:
 - Phase 1: Parallel subprocess calls to Claude CLI (Sonnet) extract lessons from each conversation
 - Phase 2: Single Opus session synthesizes lessons and updates documentation with clean context
-- Batches subagents 3-5 at a time to prevent async completion message flooding
+- Phase 3: Generate conversation summaries for the browser (uses Haiku)
+- Phase 4 (optional): CLAUDE.md cleanup - removes stale/one-off content (uses Opus)
+- `auto` subcommand: discovers previously-processed projects and runs incrementally
+- `cleanup` subcommand: runs only the cleanup phase on a project
 - Uses `--retry` flag to skip Phase 1 if lesson files already exist
 
 ## Data Paths
@@ -173,6 +182,21 @@ Specific tool options override general ones (e.g., `show_explore_full=True` show
 - **Directory naming**: Both `/` and `.` characters are converted to `-` in project directory names (e.g., `/working/JFD.API` → `-working-JFD-API`)
 - **Subdirectory projects**: Running `claude code` from subdirectories creates separate project directories that won't match parent directory searches
 - **Related directories**: Use `--related` flag for moved projects - historical paths don't need to exist on disk
+
+### CLAUDE.md Content Quality
+When adding content to CLAUDE.md, **DO NOT include**:
+- **One-off decisions**: "We chose X for feature Y" unless it establishes a pattern
+- **Obvious things**: Standard language features, common library usage, generic best practices
+- **Stale information**: References to code that no longer exists or has been refactored
+- **Redundant content**: Information already in docs/ files (reference instead of repeat)
+
+**DO include**:
+- Project-specific conventions that aren't obvious from the code
+- Gotchas that have caused problems multiple times
+- Patterns unique to this codebase
+- Information that would save significant debugging time
+
+A concise CLAUDE.md (~100-200 lines) is more useful than a comprehensive one. Use `cl_dream.py cleanup` periodically to remove low-value content.
 
 ## Documentation
 

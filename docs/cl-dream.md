@@ -4,9 +4,9 @@ Tool for extracting lessons from Claude Code conversations and updating project 
 
 ## Architecture
 
-### Two-Phase Design
+### Multi-Phase Design
 
-The tool uses a two-phase architecture to optimize for both cost and quality:
+The tool uses a multi-phase architecture to optimize for both cost and quality:
 
 **Phase 1: Parallel Extraction (Sonnet)**
 - Spawns subprocess calls to Claude CLI with Sonnet model
@@ -21,7 +21,19 @@ The tool uses a two-phase architecture to optimize for both cost and quality:
 - Synthesizes patterns across sessions
 - Updates CLAUDE.md and docs/ files directly
 
-### Why Two Phases?
+**Phase 3: Summary Generation (Haiku)**
+- Generates conversation summaries for the browser
+- Uses Haiku for fast/cheap processing
+- Writes to `~/.claude/transcript_summaries.json`
+- Compatible with `browse_transcripts.py` and `browse_web.py`
+
+**Phase 4: Cleanup (Opus, optional)**
+- Reviews CLAUDE.md for stale/low-value content
+- Uses git history to understand recent changes
+- Removes one-off decisions, obvious things, stale references
+- Run with `--cleanup` flag or standalone via `cl_dream.py cleanup`
+
+### Why Multi-Phase?
 
 Running many subagents within an Opus session causes context bloat from orchestration overhead. By extracting to files first:
 - Each Sonnet subprocess gets clean context
@@ -46,7 +58,37 @@ python cl_dream.py /path/to/project --retry
 
 # Preview without changes
 python cl_dream.py /path/to/project --dry-run
+
+# Auto mode: run on all previously-processed projects
+python cl_dream.py auto
+
+# Auto mode with cleanup
+python cl_dream.py auto --cleanup
+
+# Cleanup only (no lesson extraction)
+python cl_dream.py cleanup /path/to/project
+
+# Skip summary generation
+python cl_dream.py /path/to/project --skip-summaries
 ```
+
+### Auto Mode
+
+The `auto` subcommand discovers projects from `~/.claude/dream_state.json` where cl_dream was previously run and processes them incrementally:
+
+- Only processes projects that still exist on disk
+- Skips projects that have been moved or deleted
+- Runs the full workflow on each project sequentially
+- Useful for periodic maintenance: `cl_dream.py auto --cleanup`
+
+### Cleanup Mode
+
+The `cleanup` subcommand runs only Phase 4 on a project:
+
+- Reviews CLAUDE.md content quality
+- Checks git history for context
+- Removes stale, one-off, or obvious content
+- Can be run standalone or as part of full workflow with `--cleanup`
 
 ## Configuration
 
