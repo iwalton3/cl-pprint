@@ -62,6 +62,12 @@ export default defineComponent('settings-panel', {
                                        on-change="${this.handleChange('showThinking')}">
                                 Show Thinking Blocks
                             </label>
+                            <label>
+                                <input type="checkbox"
+                                       checked="${this.stores.app.showCompactionSummary}"
+                                       on-change="${this.handleChange('showCompactionSummary')}">
+                                Show Compaction Summary
+                            </label>
                         </div>
 
                         <div class="settings-section">

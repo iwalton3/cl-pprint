@@ -316,6 +316,7 @@ class TranscriptHandler(SimpleHTTPRequestHandler):
             'exclude_view_tools': query.get('exclude_view_tools', ['0'])[0] == '1',
             'show_explore_full': query.get('show_explore_full', ['0'])[0] == '1',
             'show_subagents_full': query.get('show_subagents_full', ['0'])[0] == '1',
+            'show_compaction_summary': query.get('show_compaction_summary', ['0'])[0] == '1',
         }
 
     def send_json(self, data: dict, status: int = 200):
@@ -341,7 +342,8 @@ class TranscriptHandler(SimpleHTTPRequestHandler):
     def handle_get_transcript(self, session_id: str, show_tools: bool = False, show_thinking: bool = False,
                                truncate_tool_calls: bool = True, truncate_tool_results: bool = True,
                                exclude_edit_tools: bool = False, exclude_view_tools: bool = False,
-                               show_explore_full: bool = False, show_subagents_full: bool = False):
+                               show_explore_full: bool = False, show_subagents_full: bool = False,
+                               show_compaction_summary: bool = False):
         """GET /api/transcript/<id> - Get formatted transcript content."""
         transcript = _transcripts_by_id.get(session_id)
         if not transcript:
@@ -363,7 +365,8 @@ class TranscriptHandler(SimpleHTTPRequestHandler):
                 exclude_edit_tools=exclude_edit_tools,
                 exclude_view_tools=exclude_view_tools,
                 show_explore_full=show_explore_full,
-                show_subagents_full=show_subagents_full
+                show_subagents_full=show_subagents_full,
+                show_compaction_summary=show_compaction_summary
             )
 
             self.send_json({
@@ -378,7 +381,8 @@ class TranscriptHandler(SimpleHTTPRequestHandler):
     def handle_download(self, session_id: str, show_tools: bool = False, show_thinking: bool = False,
                         truncate_tool_calls: bool = True, truncate_tool_results: bool = True,
                         exclude_edit_tools: bool = False, exclude_view_tools: bool = False,
-                        show_explore_full: bool = False, show_subagents_full: bool = False):
+                        show_explore_full: bool = False, show_subagents_full: bool = False,
+                        show_compaction_summary: bool = False):
         """GET /api/download/<id> - Download transcript as markdown file."""
         transcript = _transcripts_by_id.get(session_id)
         if not transcript:
@@ -400,7 +404,8 @@ class TranscriptHandler(SimpleHTTPRequestHandler):
                 exclude_edit_tools=exclude_edit_tools,
                 exclude_view_tools=exclude_view_tools,
                 show_explore_full=show_explore_full,
-                show_subagents_full=show_subagents_full
+                show_subagents_full=show_subagents_full,
+                show_compaction_summary=show_compaction_summary
             )
 
             # Generate filename: YYYYMMDD_[ai-filename].md

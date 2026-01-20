@@ -12,6 +12,7 @@ const defaultSettings = {
     excludeViewTools: false,
     showExploreFull: false,
     showSubagentsFull: false,
+    showCompactionSummary: false,
 };
 
 // Load saved settings
@@ -85,5 +86,6 @@ export function buildQueryString() {
     params.set('exclude_view_tools', appStore.state.excludeViewTools ? '1' : '0');
     params.set('show_explore_full', appStore.state.showExploreFull ? '1' : '0');
     params.set('show_subagents_full', appStore.state.showSubagentsFull ? '1' : '0');
+    params.set('show_compaction_summary', appStore.state.showCompactionSummary ? '1' : '0');
     return params.toString();
 }

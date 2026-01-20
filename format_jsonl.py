@@ -9,6 +9,7 @@ Options:
     --show-tools      Show tool calls (hidden by default)
     --show-thinking   Show thinking blocks (hidden by default)
     --show-status     Show status messages like "Let me X" (hidden by default)
+    --show-compaction-summary  Show summary for compacted conversations (hidden by default)
     --exclude-timestamps  Hide timestamps
 
 Features:
@@ -752,7 +753,8 @@ def extract_message_content(entry, show_tools=False, show_thinking=False,
                             tool_id_to_input=None,
                             truncate_tool_calls=True, truncate_tool_results=True,
                             exclude_edit_tools=False, exclude_view_tools=False,
-                            show_explore_full=False, show_subagents_full=False):
+                            show_explore_full=False, show_subagents_full=False,
+                            show_compaction_summary=False):
     """Extract content parts from an entry. Returns (content_parts, is_brief, has_plan_result, content_type).
 
     tool_id_to_name: Dict that maps tool_use IDs to tool names. Passed in to track across messages.
@@ -763,6 +765,7 @@ def extract_message_content(entry, show_tools=False, show_thinking=False,
     exclude_view_tools: If True, hide Read/Grep/Glob tool calls.
     show_explore_full: If True, always show Explore agent calls in full (overrides truncation).
     show_subagents_full: If True, always show non-Explore subagent calls in full.
+    show_compaction_summary: If True, include summary content for compacted conversations.
     content_type: 'text', 'tool_call', 'tool_result', or 'mixed' - indicates primary content type
     """
     if tool_id_to_name is None:
@@ -795,6 +798,8 @@ def extract_message_content(entry, show_tools=False, show_thinking=False,
             if is_caveat_message(content):
                 return [], False, False, 'text'
             if is_compaction_message(content):
+                if show_compaction_summary:
+                    return [f"__COMPACTION__:{content}"], False, False, 'text'
                 return ["__COMPACTION__"], False, False, 'text'
             if '<command-name>' in content:
                 cmd_formatted, should_filter = parse_user_command(content)
@@ -830,7 +835,10 @@ def extract_message_content(entry, show_tools=False, show_thinking=False,
                     if is_caveat_message(text):
                         continue
                     if is_compaction_message(text):
-                        content_parts.append("__COMPACTION__")
+                        if show_compaction_summary:
+                            content_parts.append(f"__COMPACTION__:{text}")
+                        else:
+                            content_parts.append("__COMPACTION__")
                         continue
                     content_parts.append(text)
                     has_text = True
@@ -954,7 +962,8 @@ def format_jsonl(input_path, output_path=None, show_tools=False, show_thinking=F
                  show_timestamps=True, show_status=False, title=None, description=None,
                  truncate_tool_calls=True, truncate_tool_results=True,
                  exclude_edit_tools=False, exclude_view_tools=False,
-                 show_explore_full=False, show_subagents_full=False):
+                 show_explore_full=False, show_subagents_full=False,
+                 show_compaction_summary=False):
     """Format entire JSONL file.
 
     Args:
@@ -972,6 +981,7 @@ def format_jsonl(input_path, output_path=None, show_tools=False, show_thinking=F
         exclude_view_tools: Hide Read/Grep/Glob tool calls (default False)
         show_explore_full: Always show Explore agent calls in full (default False)
         show_subagents_full: Always show non-Explore subagent calls in full (default False)
+        show_compaction_summary: Show summary for compacted conversations (default False)
     """
     output_lines = []
 
@@ -1036,7 +1046,8 @@ def format_jsonl(input_path, output_path=None, show_tools=False, show_thinking=F
             tool_id_to_input,
             truncate_tool_calls, truncate_tool_results,
             exclude_edit_tools, exclude_view_tools,
-            show_explore_full, show_subagents_full
+            show_explore_full, show_subagents_full,
+            show_compaction_summary
         )
 
         if not content_parts:
@@ -1044,8 +1055,15 @@ def format_jsonl(input_path, output_path=None, show_tools=False, show_thinking=F
             continue
 
         # Check for compaction marker
-        if len(content_parts) == 1 and content_parts[0] == "__COMPACTION__":
+        if len(content_parts) == 1 and content_parts[0].startswith("__COMPACTION__"):
             output_lines.append("## ♻️ Session Compacted\n")
+            # Check if summary is included
+            if content_parts[0].startswith("__COMPACTION__:"):
+                summary_text = content_parts[0][len("__COMPACTION__:"):]
+                output_lines.append("> **Summary:**\n>")
+                for line in summary_text.split('\n'):
+                    output_lines.append(f"> {line}")
+                output_lines.append("")
             output_lines.append("---\n")
             i += 1
             continue
@@ -1069,7 +1087,8 @@ def format_jsonl(input_path, output_path=None, show_tools=False, show_thinking=F
                         tool_id_to_input,
                         truncate_tool_calls, truncate_tool_results,
                         exclude_edit_tools, exclude_view_tools,
-                        show_explore_full, show_subagents_full
+                        show_explore_full, show_subagents_full,
+                        show_compaction_summary
                     )
                     if not next_parts:
                         # Empty entry (tool results, queue-operation, etc.) - skip
@@ -1085,7 +1104,8 @@ def format_jsonl(input_path, output_path=None, show_tools=False, show_thinking=F
                     tool_id_to_input,
                     truncate_tool_calls, truncate_tool_results,
                     exclude_edit_tools, exclude_view_tools,
-                    show_explore_full, show_subagents_full
+                    show_explore_full, show_subagents_full,
+                    show_compaction_summary
                 )
 
                 if not next_parts:
@@ -1309,6 +1329,9 @@ Examples:
                         help='Always show Explore agent calls in full (overrides truncation)')
     parser.add_argument('--show-subagents-full', action='store_true',
                         help='Always show non-Explore subagent calls in full')
+    # Compaction options
+    parser.add_argument('--show-compaction-summary', action='store_true',
+                        help='Show summary for compacted conversations (hidden by default)')
 
     args = parser.parse_args()
 
@@ -1324,7 +1347,8 @@ Examples:
         exclude_edit_tools=args.exclude_edit_tools,
         exclude_view_tools=args.exclude_view_tools,
         show_explore_full=args.show_explore_full,
-        show_subagents_full=args.show_subagents_full
+        show_subagents_full=args.show_subagents_full,
+        show_compaction_summary=args.show_compaction_summary
     )
 
 
