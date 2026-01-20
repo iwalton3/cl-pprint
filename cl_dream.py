@@ -1259,61 +1259,90 @@ Read the lesson files and update CLAUDE.md for each primary project, then run va
 # CLAUDE.md Cleanup Phase
 # =============================================================================
 
-CLEANUP_SYSTEM_PROMPT = """You are a documentation quality reviewer for CLAUDE.md files.
-
-Your job is to clean up CLAUDE.md by removing content that doesn't provide lasting value.
+CLEANUP_SYSTEM_PROMPT = """You are optimizing CLAUDE.md to help future Claude sessions become productive quickly.
 
 ## Project Directory
 {project_dir}
 
-## What to REMOVE
+## Your Goal
 
-1. **One-off decisions** that won't recur:
-   - "We decided to use X for this specific feature" (unless it's a pattern)
-   - Temporary workarounds that have been resolved
-   - Decisions specific to a single PR or ticket
+Curate CLAUDE.md so it provides maximum value for future tasks. Target: ~100-300 lines.
+You can REMOVE low-value content, ADD missing critical content, and REORGANIZE for clarity.
 
-2. **Obvious things** any experienced developer would know:
-   - Basic language features ("Python uses indentation")
-   - Standard library usage ("Use os.path for file paths")
-   - Generic best practices ("Write tests", "Use descriptive names")
+## First: Understand the Project
 
-3. **Stale information**:
-   - References to files/functions that no longer exist
-   - Patterns for code that was refactored away
-   - Workarounds for bugs that were fixed
+Before making changes:
+1. Read CLAUDE.md thoroughly
+2. Explore the codebase briefly - what are the main patterns?
+3. Check docs/ folder - what's documented elsewhere? (Don't duplicate, reference it)
 
-4. **Redundant content**:
-   - Information duplicated in docs/ files (CLAUDE.md should reference, not repeat)
-   - Multiple entries saying the same thing in different words
+## What to Remove
 
-## What to KEEP
+**One-off details** (task is done, won't be referenced again):
+- "Added /health endpoint for Azure"
+- "Fixed null check in foo()"
+- "Set timeout to 30s for slow connections"
+- "Removed feature X because Y" (it's gone, history doesn't help)
 
-- Project-specific conventions that aren't obvious
-- Gotchas that have bitten people multiple times
-- Patterns unique to this codebase
-- Information that would save significant debugging time
-- Cross-cutting concerns that affect many files
+**Generic advice** (not specific to this project):
+- Standard language features or library usage
+- Generic best practices ("write tests", "use meaningful names")
+- Things any experienced developer would know
 
-## Your Workflow
+**Easily discoverable things**:
+- Obvious file structures that are clear from `ls` or file browsing
+- Information that's a quick grep/search away
+- Things documented in README or other obvious places (just link instead)
 
-1. **Read CLAUDE.md** to understand current content
-2. **Check git history** to understand what's changed recently:
-   - `git log --oneline -20` for recent commits
-   - `git diff HEAD~20 -- CLAUDE.md` if CLAUDE.md was recently modified
-3. **Review docs/ folder** to identify duplicated content
-4. **Verify file references** - use Glob to check if referenced files exist
-5. **Edit CLAUDE.md** to remove stale/one-off/obvious content
-6. **Consolidate** remaining content for clarity
+**Verbose explanations** - prefer concise bullets over paragraphs
 
-## Output Format
+## What to Keep
 
-After making changes, provide a summary:
-- **Removed**: List items removed and why
-- **Kept**: Notable items that were kept
-- **Suggestions**: Any structural improvements needed
+**Project-specific knowledge** that helps someone become productive:
+- Commands to build, test, lint, run
+- High-level architecture (the "big picture" requiring multiple files to understand)
+- Patterns unique to this codebase (component construction, decorators, conventions)
+- Gotchas that have wasted debugging time
+- File/path hints that prevent unnecessary searching
 
-Be aggressive about removing low-value content. A concise CLAUDE.md is more useful than a comprehensive one."""
+**Key question**: "Would this help me get productive in this project faster?"
+
+## What to Add (if missing)
+
+- Build/test/run commands
+- Architecture overview if complex
+- Critical patterns not obvious from code
+- Links to detailed docs (don't duplicate content)
+
+## Required Reading Directives (IMPORTANT)
+
+When significant content is externalized to docs/, add clear "MUST read before" instructions.
+This is critical - without these, Claude will attempt work with incomplete information.
+
+Example:
+```markdown
+## Required Reading (VERY IMPORTANT)
+
+**You MUST read these docs before starting work:**
+
+| Before doing... | Read this first |
+|-----------------|-----------------|
+| Writing/modifying ANY component | [FRAMEWORK.md](FRAMEWORK.md) |
+| Changing database schema | [docs/database.md](docs/database.md) |
+```
+
+Add these whenever:
+- A framework/library has its own docs (FRAMEWORK.md, etc.)
+- Complex subsystems have dedicated documentation
+- Patterns are too detailed for CLAUDE.md but essential for correct implementation
+
+## Guidelines
+
+- Use judgment - you have project context
+- Concise > comprehensive (aim for scannable)
+- Reference docs/ instead of duplicating
+- If uncertain about removing, lean toward keeping
+- It's fine to make no changes if already well-curated"""
 
 
 def run_cleanup_phase(project_dir: Path, dry_run: bool = False) -> bool:

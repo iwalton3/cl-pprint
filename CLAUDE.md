@@ -103,6 +103,13 @@ The `config.py` module provides `get(key)` for dot-notation access and `get_path
 - `cleanup` subcommand: runs only the cleanup phase on a project
 - Uses `--retry` flag to skip Phase 1 if lesson files already exist
 
+**Cleanup phase guidelines** - optimizes CLAUDE.md (~100-300 lines target):
+- Key question: "Would this help me get productive in this project faster?"
+- REMOVE: One-off details, generic advice, easily discoverable things, verbose explanations
+- KEEP: Commands, architecture, unique patterns, gotchas, file hints
+- Reference docs/ instead of duplicating content
+- ADD "Required Reading (VERY IMPORTANT)" section when content is externalized to docs
+
 ## Data Paths
 
 - Claude logs: `~/.claude/projects/<project-dir>/<session>.jsonl`
