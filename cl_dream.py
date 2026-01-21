@@ -1181,6 +1181,7 @@ Read the lesson files and update CLAUDE.md for each primary project, then run va
         '--allowedTools', 'Read,Write,Edit,Glob,Grep,Task',
         '--output-format', 'stream-json',  # Stream output as it happens
         '--verbose',
+        '--no-session-persistence',  # Don't create history entries for cl_dream runs
         *add_dir_args,
     ]
 
@@ -1381,6 +1382,7 @@ Use the Edit tool to make changes directly."""
         '--allowedTools', 'Read,Edit,Glob,Grep,Bash',
         '--output-format', 'stream-json',
         '--verbose',
+        '--no-session-persistence',  # Don't create history entries for cl_dream runs
         '--add-dir', str(project_dir),
     ]
 
