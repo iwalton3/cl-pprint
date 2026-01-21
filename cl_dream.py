@@ -28,6 +28,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import datetime
@@ -355,6 +356,273 @@ def find_new_conversations(primary_dirs: list[Path], related_dirs: list[Path],
 
     conversations.sort(key=lambda x: x[1])
     return conversations
+
+
+# =============================================================================
+# Exploration Pattern Analysis
+# =============================================================================
+
+def extract_tool_calls(jsonl_path: Path) -> list[dict]:
+    """Extract all tool calls from a JSONL session file.
+
+    Returns list of dicts with: tool_name, tool_input, timestamp
+    """
+    tool_calls = []
+
+    try:
+        with open(jsonl_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    entry = json.loads(line)
+                    if entry.get('type') != 'assistant':
+                        continue
+
+                    msg = entry.get('message', {})
+                    content = msg.get('content', [])
+                    timestamp = entry.get('timestamp')
+
+                    if isinstance(content, list):
+                        for item in content:
+                            if isinstance(item, dict) and item.get('type') == 'tool_use':
+                                tool_calls.append({
+                                    'tool_name': item.get('name', ''),
+                                    'tool_input': item.get('input', {}),
+                                    'timestamp': timestamp,
+                                })
+                except json.JSONDecodeError:
+                    continue
+    except (IOError, OSError):
+        pass
+
+    return tool_calls
+
+
+def analyze_exploration_patterns(project_dirs: list[Path],
+                                  claude_projects: Path = None) -> dict:
+    """Analyze all historical sessions for exploration patterns.
+
+    Returns dict with:
+    - file_heatmap: list of (file_path, count, percentage) tuples
+    - explore_prompts: list of explore agent prompts
+    - grep_patterns: Counter of grep patterns searched
+    - session_count: total sessions analyzed
+    """
+    if claude_projects is None:
+        claude_projects = Path.home() / '.claude' / 'projects'
+
+    file_access = Counter()      # file_path -> count
+    explore_prompts = []         # list of explore agent prompts
+    grep_patterns = Counter()    # pattern -> count
+    glob_patterns = Counter()    # pattern -> count
+    session_count = 0
+
+    # Find all project directories
+    all_claude_dirs = []
+    for proj in project_dirs:
+        claude_dirs = find_matching_project_dirs(proj, claude_projects)
+        all_claude_dirs.extend(claude_dirs)
+
+    if not all_claude_dirs:
+        return {
+            'file_heatmap': [],
+            'explore_prompts': [],
+            'grep_patterns': [],
+            'glob_patterns': [],
+            'session_count': 0,
+        }
+
+    # Process all sessions
+    for claude_dir in all_claude_dirs:
+        for jsonl_path in claude_dir.glob("*.jsonl"):
+            if jsonl_path.name.startswith("agent-"):
+                continue
+
+            session_count += 1
+            tool_calls = extract_tool_calls(jsonl_path)
+
+            for call in tool_calls:
+                tool_name = call['tool_name']
+                tool_input = call['tool_input']
+
+                # Track file access from Read tool
+                if tool_name == 'Read':
+                    file_path = tool_input.get('file_path', '')
+                    if file_path:
+                        # Normalize to relative path if within project
+                        file_access[file_path] += 1
+
+                # Track Glob patterns
+                elif tool_name == 'Glob':
+                    pattern = tool_input.get('pattern', '')
+                    if pattern:
+                        glob_patterns[pattern] += 1
+
+                # Track Grep patterns
+                elif tool_name == 'Grep':
+                    pattern = tool_input.get('pattern', '')
+                    if pattern:
+                        grep_patterns[pattern] += 1
+
+                # Track Explore agent prompts
+                elif tool_name == 'Task':
+                    subagent_type = tool_input.get('subagent_type', '')
+                    if subagent_type == 'Explore':
+                        prompt = tool_input.get('prompt', '')
+                        if prompt:
+                            explore_prompts.append(prompt)
+
+    # Generate heatmap (top 30 files)
+    file_heatmap = []
+    for file_path, count in file_access.most_common(30):
+        percentage = (count / session_count * 100) if session_count > 0 else 0
+        file_heatmap.append((file_path, count, percentage))
+
+    return {
+        'file_heatmap': file_heatmap,
+        'explore_prompts': explore_prompts,
+        'grep_patterns': grep_patterns.most_common(20),
+        'glob_patterns': glob_patterns.most_common(20),
+        'session_count': session_count,
+    }
+
+
+EXPLORE_SUMMARY_PROMPT = """Analyze these Explore agent prompts from Claude Code sessions.
+These are questions Claude asked when it needed to understand parts of the codebase.
+
+Identify:
+1. **Recurring Themes**: What topics/questions come up repeatedly? Group similar questions.
+2. **Knowledge Gaps**: What parts of the codebase seem unclear or underdocumented?
+3. **Suggested Documentation**: What should be added to CLAUDE.md or docs/ to prevent these explorations?
+
+For each theme, note approximately how many times it appeared.
+
+Explore prompts:
+{prompts}
+
+Output a structured analysis with the three sections above. Be concise and actionable."""
+
+
+def summarize_explore_prompts(prompts: list[str]) -> str:
+    """Use Sonnet to summarize explore prompts into themes and gaps.
+
+    Returns the summary text, or empty string on failure.
+    """
+    if not prompts:
+        return ""
+
+    # Deduplicate and limit
+    unique_prompts = list(set(prompts))
+    if len(unique_prompts) > 50:
+        # Sample if too many
+        unique_prompts = unique_prompts[:50]
+
+    prompts_text = '\n'.join(f"- {p[:500]}" for p in unique_prompts)
+    prompt = EXPLORE_SUMMARY_PROMPT.format(prompts=prompts_text)
+
+    try:
+        cmd = [
+            config.get_claude_cli(),
+            '--print',
+            '--model', 'sonnet',
+            '--output-format', 'text',
+            '--no-session-persistence',
+        ]
+
+        result = subprocess.run(
+            cmd,
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+        return ""
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return ""
+
+
+def generate_exploration_analysis(project_dirs: list[Path], output_path: Path) -> bool:
+    """Generate exploration analysis file for Opus synthesis.
+
+    Returns True if analysis was generated successfully.
+    """
+    console.print("[bold]Analyzing exploration patterns across all sessions...[/bold]")
+
+    analysis = analyze_exploration_patterns(project_dirs)
+
+    if analysis['session_count'] == 0:
+        console.print("[yellow]No sessions found to analyze[/yellow]")
+        return False
+
+    console.print(f"  Analyzed {analysis['session_count']} sessions")
+    console.print(f"  Found {len(analysis['explore_prompts'])} Explore agent calls")
+
+    # Build the analysis document
+    lines = ["# Exploration Pattern Analysis\n"]
+    lines.append(f"Based on {analysis['session_count']} historical sessions.\n")
+
+    # File access heatmap
+    lines.append("## File Access Heatmap\n")
+    lines.append("Files most frequently accessed across sessions:\n")
+    lines.append("| File | Sessions | % |")
+    lines.append("|------|----------|---|")
+
+    for file_path, count, pct in analysis['file_heatmap'][:20]:
+        # Truncate long paths for readability
+        display_path = file_path
+        if len(display_path) > 60:
+            display_path = "..." + display_path[-57:]
+        lines.append(f"| {display_path} | {count} | {pct:.0f}% |")
+
+    lines.append("")
+
+    # Grep patterns
+    if analysis['grep_patterns']:
+        lines.append("## Common Search Patterns\n")
+        lines.append("Patterns frequently searched with Grep:\n")
+        for pattern, count in analysis['grep_patterns'][:10]:
+            # Escape pipe characters for markdown table
+            safe_pattern = pattern.replace('|', '\\|')[:50]
+            lines.append(f"- `{safe_pattern}` ({count} times)")
+        lines.append("")
+
+    # Glob patterns
+    if analysis['glob_patterns']:
+        lines.append("## Common Glob Patterns\n")
+        lines.append("File patterns frequently searched:\n")
+        for pattern, count in analysis['glob_patterns'][:10]:
+            lines.append(f"- `{pattern}` ({count} times)")
+        lines.append("")
+
+    # Explore prompts summary
+    if analysis['explore_prompts']:
+        lines.append("## Explore Agent Analysis\n")
+        lines.append(f"Found {len(analysis['explore_prompts'])} Explore agent calls.\n")
+
+        console.print("  Summarizing explore prompts with Sonnet...")
+        summary = summarize_explore_prompts(analysis['explore_prompts'])
+
+        if summary:
+            lines.append("### Themes and Knowledge Gaps\n")
+            lines.append(summary)
+        else:
+            # Fallback: just list unique prompts
+            lines.append("### Sample Explore Prompts\n")
+            unique = list(set(analysis['explore_prompts']))[:15]
+            for p in unique:
+                lines.append(f"- {p[:200]}")
+
+    lines.append("")
+
+    # Write the analysis file
+    output_path.write_text('\n'.join(lines))
+    console.print(f"  Analysis written to {output_path}")
+
+    return True
 
 
 # =============================================================================
@@ -846,11 +1114,36 @@ def smart_backup(file_path: Path) -> Path | None:
 # =============================================================================
 
 def build_opus_system_prompt(primary_dirs: list[Path], related_dirs: list[Path],
-                              temp_dir: Path) -> str:
+                              temp_dir: Path, has_exploration_analysis: bool = False) -> str:
     """Build the system prompt for Opus synthesis phase."""
 
     primary_list = '\n'.join(f"  - {p}" for p in primary_dirs)
     related_list = '\n'.join(f"  - {p}" for p in related_dirs) if related_dirs else "  (none)"
+
+    exploration_section = ""
+    if has_exploration_analysis:
+        exploration_section = f"""
+### Step 0: Review Exploration Patterns (NEW - Do This First)
+
+An exploration analysis has been generated from ALL historical sessions: `{temp_dir}/exploration_analysis.md`
+
+This analysis contains:
+- **File Access Heatmap**: Files most frequently read across sessions
+- **Common Search Patterns**: What Claude frequently searches for
+- **Explore Agent Analysis**: Questions Claude asked when it needed to understand the codebase
+
+**Use this to inform documentation updates:**
+
+1. **Key Locations section**: Files in the heatmap with >30% access rate should be in a "Key Locations" table in CLAUDE.md
+2. **Recurring exploration themes**: If the same questions appear multiple times, that's a documentation gap
+3. **Frequency-based placement**:
+   - Themes appearing in 5+ sessions → Add to CLAUDE.md (high-frequency need)
+   - Themes appearing 2-4 times → Add to docs/ (moderate-frequency, detailed explanation)
+   - Themes appearing once → Skip (one-off, not worth documenting)
+
+Read this file FIRST before reading lessons - it provides the "big picture" of what knowledge is missing.
+
+"""
 
     return f"""You are cl-dream, helping Claude Code learn from past conversations.
 
@@ -867,7 +1160,7 @@ def build_opus_system_prompt(primary_dirs: list[Path], related_dirs: list[Path],
 ## Your Task: Documentation Update
 
 Lessons have been pre-extracted and are available at: {temp_dir}/lessons/
-
+{exploration_section}
 ### Step 1: Context Priming (CRITICAL - Do This First)
 Before making ANY documentation changes, understand what already exists:
 
@@ -964,6 +1257,32 @@ DO NOT add these types of content - they create noise and reduce the document's 
 - Project-specific conventions not obvious from the code
 - Architectural decisions that affect how new code should be written
 - Integration points with external systems that have quirks
+- **Key Locations** - files frequently accessed (from exploration analysis)
+
+**Key Locations Section (IMPORTANT):**
+
+If CLAUDE.md doesn't have a "Key Locations" section, ADD ONE near the top (after Overview/Commands).
+Use this format:
+
+```markdown
+## Key Locations
+
+| To find... | Look in... |
+|------------|------------|
+| JSONL parsing, markdown output | format_jsonl.py |
+| Main workflow orchestration | cl_dream.py → run_dream_workflow() |
+| Config loading | config.py (get, get_path helpers) |
+| Web UI components | static/components/*.js |
+```
+
+**Rules for Key Locations:**
+- Include files from heatmap with >30% session access rate
+- Use function/class names instead of line numbers (more stable)
+- Focus on entry points: "where to START looking" not exhaustive lists
+- Group related files when it makes sense
+- Keep to 8-12 entries max - this is a quick reference, not a full index
+
+This section prevents expensive Explore() calls by telling Claude where things are upfront.
 
 **Validation Before Including Lessons:**
 When synthesizing lessons into CLAUDE.md or docs/:
@@ -1140,19 +1459,26 @@ After validation is complete, print a summary:
 
 
 def run_opus_interactive(primary_dirs: list[Path], related_dirs: list[Path],
-                         temp_dir: Path, dry_run: bool = False) -> bool:
+                         temp_dir: Path, dry_run: bool = False,
+                         has_exploration_analysis: bool = False) -> bool:
     """Run Opus for documentation synthesis with tool access and streaming output.
 
     Opus will:
     1. Read pre-extracted lessons from temp_dir/lessons/
-    2. Synthesize lessons into CLAUDE.md updates using Write/Edit tools
-    3. Launch validation subagents
-    4. Stream output to terminal
+    2. Read exploration analysis if available
+    3. Synthesize lessons into CLAUDE.md updates using Write/Edit tools
+    4. Launch validation subagents
+    5. Stream output to terminal
     """
-    system_prompt = build_opus_system_prompt(primary_dirs, related_dirs, temp_dir)
+    system_prompt = build_opus_system_prompt(primary_dirs, related_dirs, temp_dir,
+                                             has_exploration_analysis=has_exploration_analysis)
+
+    exploration_note = ""
+    if has_exploration_analysis:
+        exploration_note = f"\nExploration analysis is available at: {temp_dir}/exploration_analysis.md - read this FIRST.\n"
 
     user_prompt = f"""Please proceed with the cl-dream workflow.
-
+{exploration_note}
 Lessons have been pre-extracted and are available at: {temp_dir}/lessons/
 
 Read the lesson files and update CLAUDE.md for each primary project, then run validation."""
@@ -1455,8 +1781,13 @@ Use the Edit tool to make changes directly."""
 
 def run_dream_workflow(primary_dirs: list[Path], related_dirs: list[Path],
                         force: bool, dry_run: bool, retry: bool,
-                        keep_temp: bool, skip_summaries: bool, cleanup: bool):
-    """Run the main cl-dream workflow on specified projects."""
+                        keep_temp: bool, skip_summaries: bool, cleanup: bool,
+                        force_analysis: bool = False):
+    """Run the main cl-dream workflow on specified projects.
+
+    Args:
+        force_analysis: Run exploration analysis even if no new conversations
+    """
 
     console.print(f"[bold]cl-dream[/bold] - Learning from past conversations\n")
     console.print(f"Primary projects: {[str(p) for p in primary_dirs]}")
@@ -1485,7 +1816,7 @@ def run_dream_workflow(primary_dirs: list[Path], related_dirs: list[Path],
     if not use_cached_lessons:
         conversation_data = find_new_conversations(primary_dirs, related_dirs, state)
 
-        if not conversation_data:
+        if not conversation_data and not force_analysis:
             console.print("[green]No new conversations to process[/green]")
             # Still run cleanup if requested
             if cleanup and not dry_run:
@@ -1493,20 +1824,23 @@ def run_dream_workflow(primary_dirs: list[Path], related_dirs: list[Path],
                     run_cleanup_phase(proj, dry_run)
             return True
 
-        console.print(f"Found [bold]{len(conversation_data)}[/bold] conversations to process\n")
+        if not conversation_data and force_analysis:
+            console.print("[yellow]No new conversations, but running exploration analysis (--force)[/yellow]\n")
+        elif conversation_data:
+            console.print(f"Found [bold]{len(conversation_data)}[/bold] conversations to process\n")
 
-        if dry_run:
-            console.print("[cyan]DRY RUN - would process:[/cyan]")
-            for conv, mtime, source in conversation_data:
-                mtime_str = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M')
-                console.print(f"  - {conv.name} (modified: {mtime_str}, from: {source.name})")
-            console.print()
+            if dry_run:
+                console.print("[cyan]DRY RUN - would process:[/cyan]")
+                for conv, mtime, source in conversation_data:
+                    mtime_str = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M')
+                    console.print(f"  - {conv.name} (modified: {mtime_str}, from: {source.name})")
+                console.print()
 
     with temp_dream_dir(keep=keep_temp) as temp_dir:
         console.print(f"[dim]Temp directory: {temp_dir}[/dim]\n")
 
-        # Step 1: Generate markdown (skip if using cached lessons)
-        if not use_cached_lessons:
+        # Step 1-2: Generate markdown and extract lessons (skip if no conversations or using cached)
+        if not use_cached_lessons and conversation_data:
             console.print("[bold]Step 1: Generating markdown...[/bold]")
 
             with Progress(
@@ -1541,10 +1875,12 @@ def run_dream_workflow(primary_dirs: list[Path], related_dirs: list[Path],
                 success_count, failure_count = extract_lessons_parallel(conversations_dir, lessons_dir)
                 console.print(f"  Extracted {success_count} lessons ({failure_count} failed)\n")
 
-                if success_count == 0:
+                if success_count == 0 and not force_analysis:
                     console.print("[red]No lessons extracted, aborting[/red]")
                     return False
-        else:
+                elif success_count == 0:
+                    console.print("[yellow]No lessons extracted, continuing with exploration analysis only[/yellow]\n")
+        elif use_cached_lessons:
             # Copy cached lessons to temp dir
             cache_dir = get_cache_dir(primary_dirs)
             for lesson_file in cache_dir.glob("*.md"):
@@ -1558,6 +1894,21 @@ def run_dream_workflow(primary_dirs: list[Path], related_dirs: list[Path],
                 if claude_md.exists():
                     smart_backup(claude_md)
 
+        # Step 2.5: Generate exploration analysis from ALL historical sessions
+        console.print("[bold]Step 2.5: Analyzing exploration patterns...[/bold]")
+        exploration_analysis_path = temp_dir / 'exploration_analysis.md'
+        has_exploration_analysis = False
+
+        if dry_run:
+            console.print("[cyan]DRY RUN - would analyze exploration patterns[/cyan]\n")
+        else:
+            # Combine primary and related dirs for full analysis
+            all_project_dirs = list(primary_dirs) + list(related_dirs)
+            has_exploration_analysis = generate_exploration_analysis(
+                all_project_dirs, exploration_analysis_path
+            )
+            console.print()
+
         # Step 3: Opus synthesizes lessons into documentation
         console.print("[bold]Step 3: Running Opus for documentation synthesis...[/bold]")
 
@@ -1565,7 +1916,8 @@ def run_dream_workflow(primary_dirs: list[Path], related_dirs: list[Path],
             primary_dirs=primary_dirs,
             related_dirs=related_dirs,
             temp_dir=temp_dir,
-            dry_run=dry_run
+            dry_run=dry_run,
+            has_exploration_analysis=has_exploration_analysis
         )
 
         if success and not dry_run:
@@ -1641,8 +1993,10 @@ Examples:
         help='Run on all previously-processed projects that still exist')
     auto_parser.add_argument('--dry-run', action='store_true',
                              help='Show what would be done without making changes')
-    auto_parser.add_argument('--force', action='store_true',
+    auto_parser.add_argument('--reprocess', action='store_true',
                              help='Reprocess all conversations (ignore state)')
+    auto_parser.add_argument('--force', action='store_true',
+                             help='Run exploration analysis even if no new conversations')
     auto_parser.add_argument('--skip-summaries', action='store_true',
                              help='Skip generating conversation summaries')
     auto_parser.add_argument('--cleanup', action='store_true',
@@ -1665,8 +2019,10 @@ Examples:
                             help='Project directories to update docs for')
     run_parser.add_argument('--related', nargs='*', type=Path, default=[],
                             help='Related projects (conversations included, docs NOT updated)')
-    run_parser.add_argument('--force', action='store_true',
+    run_parser.add_argument('--reprocess', action='store_true',
                             help='Reprocess all conversations (ignore state)')
+    run_parser.add_argument('--force', action='store_true',
+                            help='Run exploration analysis even if no new conversations')
     run_parser.add_argument('--dry-run', action='store_true',
                             help='Show what would be done without making changes')
     run_parser.add_argument('--retry', action='store_true',
@@ -1700,12 +2056,13 @@ Examples:
             run_dream_workflow(
                 primary_dirs=[proj],
                 related_dirs=[],
-                force=args.force,
+                force=args.reprocess,
                 dry_run=args.dry_run,
                 retry=False,
                 keep_temp=args.keep_temp,
                 skip_summaries=args.skip_summaries,
                 cleanup=args.cleanup,
+                force_analysis=args.force,
             )
 
         return
@@ -1743,12 +2100,13 @@ Examples:
         run_dream_workflow(
             primary_dirs=primary_dirs,
             related_dirs=related_dirs,
-            force=args.force,
+            force=args.reprocess,
             dry_run=args.dry_run,
             retry=args.retry,
             keep_temp=args.keep_temp,
             skip_summaries=args.skip_summaries,
             cleanup=args.cleanup,
+            force_analysis=args.force,
         )
         return
 

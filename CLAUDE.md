@@ -96,12 +96,17 @@ The `config.py` module provides `get(key)` for dot-notation access and `get_path
 
 **cl_dream.py** uses multi-phase architecture:
 - Phase 1: Parallel subprocess calls to Claude CLI (Sonnet) extract lessons from each conversation
+- Phase 1.5: Exploration analysis - aggregates ALL historical file access and Explore prompts into heatmap + theme summary
 - Phase 2: Single Opus session synthesizes lessons and updates documentation with clean context
 - Phase 3: Generate conversation summaries for the browser (uses Haiku)
 - Phase 4 (optional): CLAUDE.md cleanup - removes stale/one-off content (uses Opus)
 - `auto` subcommand: discovers previously-processed projects and runs incrementally
 - `cleanup` subcommand: runs only the cleanup phase on a project
 - Uses `--retry` flag to skip Phase 1 if lesson files already exist
+
+**Exploration analysis** identifies documentation gaps by analyzing what Claude repeatedly explores:
+- File access heatmap: files with >30% session access rate go in "Key Locations" table
+- Explore prompt themes: recurring questions become documentation (5+ times → CLAUDE.md, 2-4 times → docs/)
 
 **Cleanup phase guidelines** - optimizes CLAUDE.md (~100-300 lines target):
 - Key question: "Would this help me get productive in this project faster?"

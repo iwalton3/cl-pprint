@@ -15,10 +15,21 @@ The tool uses a multi-phase architecture to optimize for both cost and quality:
 - Outputs to temporary lesson files (`/tmp/cl-dream-*/lessons/*.md`)
 - Configurable parallelism via `dream.max_parallel_extractions` (default: 5)
 
+**Phase 1.5: Exploration Analysis (Algorithmic + Sonnet)**
+- Analyzes ALL historical sessions (not just new ones)
+- Extracts tool call patterns: Read, Glob, Grep, Task(Explore)
+- Generates file access heatmap (which files are read most often)
+- Aggregates Explore agent prompts (what questions Claude keeps asking)
+- Sonnet summarizes explore prompts into themes and knowledge gaps
+- Output: `exploration_analysis.md` fed to synthesis phase
+
 **Phase 2: Synthesis (Opus)**
 - Single Opus session with clean context
+- Reads exploration analysis FIRST (big picture of missing knowledge)
 - Reads all lesson files
 - Synthesizes patterns across sessions
+- Adds **Key Locations** section based on file heatmap
+- Adds documentation for frequently explored themes
 - Updates CLAUDE.md and docs/ files directly
 
 **Phase 3: Summary Generation (Haiku)**
@@ -167,3 +178,42 @@ When Phase 2 launches subagents for validation, it processes them in batches of 
 - Subprocess timeout: 5 minutes per conversation extraction
 - Failed extractions are logged but don't stop the pipeline
 - Use `--retry` to skip Phase 1 when iterating on Phase 2 prompts
+
+## Exploration Analysis
+
+The exploration analysis phase examines ALL historical sessions to identify patterns in what Claude explores:
+
+### File Access Heatmap
+Tracks which files are most frequently read via the Read tool. Files with >30% access rate should be documented in the Key Locations section of CLAUDE.md.
+
+### Explore Agent Prompts
+Aggregates all prompts sent to Task subagents with `subagent_type="Explore"`. These represent questions Claude needed answered to understand the codebase - recurring themes indicate documentation gaps.
+
+### Frequency-Based Documentation Placement
+- **5+ occurrences**: Add to CLAUDE.md (high-frequency need, must be immediately visible)
+- **2-4 occurrences**: Add to docs/ (moderate frequency, warrants detailed explanation)
+- **1 occurrence**: Skip (one-off, not worth documenting)
+
+### Key Locations Section
+The synthesis phase adds a "Key Locations" table to CLAUDE.md:
+
+```markdown
+## Key Locations
+
+| To find... | Look in... |
+|------------|------------|
+| JSONL parsing | format_jsonl.py |
+| Main workflow | cl_dream.py → run_dream_workflow() |
+| Config loading | config.py (get, get_path helpers) |
+```
+
+This prevents expensive Explore() calls by giving Claude a quick reference for where things are.
+
+### Tool Call Extraction
+The `extract_tool_calls()` function parses JSONL to find:
+- `Read` tool calls → file paths accessed
+- `Glob` tool calls → file patterns searched
+- `Grep` tool calls → content patterns searched
+- `Task` tool calls with `subagent_type="Explore"` → questions asked
+
+Note: Subagent internal tool calls aren't logged in the parent session, so we can't see what files an Explore agent read - only the prompt that was sent to it.
