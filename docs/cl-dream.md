@@ -45,19 +45,19 @@ Running many subagents within an Opus session causes context bloat from orchestr
 
 ```bash
 # Single project
-python cl_dream.py /path/to/project
+python cl_dream.py run /path/to/project
 
 # Multiple related projects
-python cl_dream.py /path/to/frontend /path/to/backend
+python cl_dream.py run /path/to/frontend /path/to/backend
 
 # Include historical paths for moved projects
-python cl_dream.py /path/to/project --related /old/path/to/project
+python cl_dream.py run /path/to/project --related /old/path/to/project
 
 # Skip Phase 1 (reuse existing lesson files)
-python cl_dream.py /path/to/project --retry
+python cl_dream.py run /path/to/project --retry
 
 # Preview without changes
-python cl_dream.py /path/to/project --dry-run
+python cl_dream.py run /path/to/project --dry-run
 
 # Auto mode: run on all previously-processed projects
 python cl_dream.py auto
@@ -69,7 +69,7 @@ python cl_dream.py auto --cleanup
 python cl_dream.py cleanup /path/to/project
 
 # Skip summary generation
-python cl_dream.py /path/to/project --skip-summaries
+python cl_dream.py run /path/to/project --skip-summaries
 ```
 
 ### Auto Mode

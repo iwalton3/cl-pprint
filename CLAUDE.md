@@ -39,7 +39,7 @@ python browse_web.py [--port 8080] [--no-browser]
 
 Extract lessons and update documentation:
 ```bash
-python cl_dream.py /path/to/project [--related /path/to/related] [--retry] [--dry-run]
+python cl_dream.py run /path/to/project [--related /path/to/related] [--retry] [--dry-run]
 
 # Run incrementally on all previously-processed projects
 python cl_dream.py auto [--cleanup]

@@ -6,7 +6,7 @@ Like sleep consolidates human memories, this tool consolidates learnings from
 coding sessions by extracting lessons and updating project documentation.
 
 Usage:
-    python cl_dream.py /path/to/project1 [/path/to/project2 ...] [options]
+    python cl_dream.py run /path/to/project1 [/path/to/project2 ...] [options]
     python cl_dream.py auto [options]  # Run on all previously-processed projects
     python cl_dream.py cleanup /path/to/project [options]  # Clean up CLAUDE.md
 
@@ -1611,16 +1611,16 @@ def main():
         epilog="""
 Examples:
     # Single project
-    python cl_dream.py /path/to/my-project
+    python cl_dream.py run /path/to/my-project
 
     # Multiple related projects (both get docs updated)
-    python cl_dream.py /path/to/frontend /path/to/backend
+    python cl_dream.py run /path/to/frontend /path/to/backend
 
     # Include conversations from shared lib without updating its docs
-    python cl_dream.py /path/to/frontend --related /path/to/shared-lib
+    python cl_dream.py run /path/to/frontend --related /path/to/shared-lib
 
     # Retry synthesis with cached lessons
-    python cl_dream.py /path/to/project --retry
+    python cl_dream.py run /path/to/project --retry
 
     # Run on all previously-processed projects
     python cl_dream.py auto
@@ -1629,7 +1629,7 @@ Examples:
     python cl_dream.py cleanup /path/to/project
 
     # Preview what would be done
-    python cl_dream.py . --dry-run
+    python cl_dream.py run . --dry-run
         """
     )
 
@@ -1658,23 +1658,25 @@ Examples:
     cleanup_parser.add_argument('--dry-run', action='store_true',
                                 help='Show what would be done without making changes')
 
-    # Default: process specific projects
-    parser.add_argument('project_dirs', nargs='*', type=Path,
-                        help='Project directories to update docs for')
-    parser.add_argument('--related', nargs='*', type=Path, default=[],
-                        help='Related projects (conversations included, docs NOT updated)')
-    parser.add_argument('--force', action='store_true',
-                        help='Reprocess all conversations (ignore state)')
-    parser.add_argument('--dry-run', action='store_true',
-                        help='Show what would be done without making changes')
-    parser.add_argument('--retry', action='store_true',
-                        help='Skip lesson extraction, reuse cached lessons')
-    parser.add_argument('--skip-summaries', action='store_true',
-                        help='Skip generating conversation summaries')
-    parser.add_argument('--cleanup', action='store_true',
-                        help='Run CLAUDE.md cleanup phase after synthesis')
-    parser.add_argument('--keep-temp', action='store_true',
-                        help='Keep temp directory for debugging')
+    # Run command - process specific projects (explicit subcommand)
+    run_parser = subparsers.add_parser('run',
+        help='Process specific project directories')
+    run_parser.add_argument('project_dirs', nargs='+', type=Path,
+                            help='Project directories to update docs for')
+    run_parser.add_argument('--related', nargs='*', type=Path, default=[],
+                            help='Related projects (conversations included, docs NOT updated)')
+    run_parser.add_argument('--force', action='store_true',
+                            help='Reprocess all conversations (ignore state)')
+    run_parser.add_argument('--dry-run', action='store_true',
+                            help='Show what would be done without making changes')
+    run_parser.add_argument('--retry', action='store_true',
+                            help='Skip lesson extraction, reuse cached lessons')
+    run_parser.add_argument('--skip-summaries', action='store_true',
+                            help='Skip generating conversation summaries')
+    run_parser.add_argument('--cleanup', action='store_true',
+                            help='Run CLAUDE.md cleanup phase after synthesis')
+    run_parser.add_argument('--keep-temp', action='store_true',
+                            help='Keep temp directory for debugging')
 
     args = parser.parse_args()
 
@@ -1718,39 +1720,41 @@ Examples:
         run_cleanup_phase(project_dir, args.dry_run)
         return
 
-    # Default: process specific projects
-    if not args.project_dirs:
-        parser.print_help()
-        sys.exit(1)
+    # Handle 'run' command - process specific projects
+    if args.command == 'run':
+        # Validate project directories
+        primary_dirs = []
+        for p in args.project_dirs:
+            resolved = p.resolve()
+            if not resolved.exists():
+                console.print(f"[red]Error: Project directory does not exist: {resolved}[/red]")
+                sys.exit(1)
+            primary_dirs.append(resolved)
 
-    # Validate project directories
-    primary_dirs = []
-    for p in args.project_dirs:
-        resolved = p.resolve()
-        if not resolved.exists():
-            console.print(f"[red]Error: Project directory does not exist: {resolved}[/red]")
-            sys.exit(1)
-        primary_dirs.append(resolved)
+        # Related dirs don't need to exist on disk - they may be old paths that were moved
+        # but Claude still has conversation logs for them
+        related_dirs = []
+        for p in args.related:
+            resolved = p.resolve()
+            related_dirs.append(resolved)
+            if not resolved.exists():
+                console.print(f"[dim]Note: Related dir {resolved} doesn't exist on disk (looking for old conversations)[/dim]")
 
-    # Related dirs don't need to exist on disk - they may be old paths that were moved
-    # but Claude still has conversation logs for them
-    related_dirs = []
-    for p in args.related:
-        resolved = p.resolve()
-        related_dirs.append(resolved)
-        if not resolved.exists():
-            console.print(f"[dim]Note: Related dir {resolved} doesn't exist on disk (looking for old conversations)[/dim]")
+        run_dream_workflow(
+            primary_dirs=primary_dirs,
+            related_dirs=related_dirs,
+            force=args.force,
+            dry_run=args.dry_run,
+            retry=args.retry,
+            keep_temp=args.keep_temp,
+            skip_summaries=args.skip_summaries,
+            cleanup=args.cleanup,
+        )
+        return
 
-    run_dream_workflow(
-        primary_dirs=primary_dirs,
-        related_dirs=related_dirs,
-        force=args.force,
-        dry_run=args.dry_run,
-        retry=args.retry,
-        keep_temp=args.keep_temp,
-        skip_summaries=args.skip_summaries,
-        cleanup=args.cleanup,
-    )
+    # No command given - show help
+    parser.print_help()
+    sys.exit(1)
 
 
 if __name__ == '__main__':
