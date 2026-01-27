@@ -498,13 +498,17 @@ def parse_entries(input_path):
                                 if tool_name == 'Write':
                                     inp = item.get('input', {})
                                     file_path = inp.get('file_path', '')
-                                    if '/plans/' in file_path or file_path.endswith('-plan.md'):
+                                    # Check for plan files (handle both Unix / and Windows \ separators)
+                                    normalized_path = file_path.replace('\\', '/')
+                                    if '/plans/' in normalized_path or file_path.endswith('-plan.md'):
                                         current_plan_content = inp.get('content', '')
 
                                 elif tool_name == 'Edit':
                                     inp = item.get('input', {})
                                     file_path = inp.get('file_path', '')
-                                    if '/plans/' in file_path or file_path.endswith('-plan.md'):
+                                    # Check for plan files (handle both Unix / and Windows \ separators)
+                                    normalized_path = file_path.replace('\\', '/')
+                                    if '/plans/' in normalized_path or file_path.endswith('-plan.md'):
                                         if current_plan_content:
                                             old_str = inp.get('old_string', '')
                                             new_str = inp.get('new_string', '')

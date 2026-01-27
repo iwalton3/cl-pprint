@@ -2,73 +2,40 @@
 
 Unfixed bugs identified during development sessions.
 
-## Windows Path Compatibility
+## Windows Path Slug Conversion (FIXED)
 
-**Severity**: Medium - Affects Windows users
-**Status**: Unfixed (session interrupted)
-**Found in**: Session 8a74d955-f9b3-4a5f-9118-8e4ef39c9d6a
+**Severity**: High - Prevented project discovery on Windows
+**Status**: Fixed
+**Found in**: Session 2025-01
 
 ### Description
 
-The default paths in `config.py` use Unix-style paths (`~/.claude/projects`) which are incorrect for Windows systems. Claude Code stores data in `%APPDATA%\Claude` on Windows.
+The path-to-directory-slug conversion in `cl_dream.py` only converted forward slashes (`/`) to dashes, but Windows paths use backslashes (`\`). This caused "No Claude project dir found" errors on Windows.
 
-### Affected Files
+**Note**: Claude Code uses `~/.claude/` on all platforms (Windows, Linux, macOS), so the data directory path is NOT the issue. The issue was only in the path slug conversion when matching project directories.
 
-- `config.py` - Lines 21-24 (DEFAULTS["paths"])
-- `browse_web.py` - Lines 209, 465 (uses config.get_path())
-
-### Current Behavior
+### Original Buggy Code
 
 ```python
-DEFAULTS = {
-    "paths": {
-        "claude_projects": "~/.claude/projects",
-        "summary_cache": "~/.claude/transcript_summaries.json",
-        # ...
-    }
-}
+# Only replaced forward slashes, missing backslashes
+path_slug = str(project_path.resolve()).replace('/', '-').replace('.', '-').lstrip('-')
 ```
 
-### Expected Behavior
+### Fix Applied
 
 ```python
-def _get_claude_data_dir():
-    """Get platform-appropriate Claude data directory."""
-    if sys.platform == 'win32':
-        appdata = os.environ.get('APPDATA')
-        if appdata:
-            return Path(appdata) / 'Claude'
-        return Path.home() / 'AppData' / 'Roaming' / 'Claude'
-    return Path.home() / '.claude'
-
-def _get_default_paths():
-    data_dir = _get_claude_data_dir()
-    return {
-        "claude_projects": str(data_dir / "projects"),
-        "summary_cache": str(data_dir / "transcript_summaries.json"),
-        # ...
-    }
+# Now handles both path separators and Windows drive letters
+resolved_path = str(project_path.resolve())
+path_slug = resolved_path.replace('\\', '/').replace('/', '-').replace('.', '-')
+path_slug = path_slug.replace(':', '')  # Remove drive colon (C: -> C)
+path_slug = path_slug.lstrip('-')
 ```
 
-### Workaround
+### Files Modified
 
-Windows users can manually set correct paths in `config.json`:
-
-```json
-{
-  "paths": {
-    "claude_projects": "%APPDATA%/Claude/projects",
-    "summary_cache": "%APPDATA%/Claude/transcript_summaries.json"
-  }
-}
-```
-
-### Notes
-
-- `Path.home()` works cross-platform but directory conventions differ
-- Windows: `%APPDATA%` (typically `C:\Users\<username>\AppData\Roaming`)
-- macOS: `~/Library/Application Support` or `~/.appname`
-- Linux: `~/.appname`
+- `cl_dream.py` - Path slug conversion in `find_matching_project_dirs()`
+- `cl_dream.py` - Partial path matching filter for Windows drive letters
+- `format_jsonl.py` - Plan file detection now normalizes path separators
 
 ---
 

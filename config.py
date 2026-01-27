@@ -12,6 +12,7 @@ from pathlib import Path
 CONFIG_PATH = Path(__file__).parent / "config.json"
 
 # Default configuration
+# Note: Claude Code uses ~/.claude on all platforms including Windows
 DEFAULTS = {
     "ollama": {
         "model": "qwen3:30b-a3b-thinking-2507-q4_K_M",
@@ -85,12 +86,17 @@ def get_path(key: str) -> Path:
 def get_claude_cli() -> str:
     """Get the path to the Claude CLI executable.
 
-    On Windows, checks ~/.local/bin/claude.exe first.
-    On other platforms, uses 'claude' from PATH.
+    Checks common installation locations, then falls back to PATH.
     """
-    if sys.platform == 'win32':
-        windows_path = Path.home() / '.local' / 'bin' / 'claude.exe'
-        if windows_path.exists():
-            return str(windows_path)
+    # Check common installation locations (work on both Windows and Unix)
+    possible_paths = [
+        Path.home() / '.claude' / 'local' / 'claude.exe',
+        Path.home() / '.claude' / 'local' / 'claude',
+        Path.home() / '.local' / 'bin' / 'claude.exe',
+        Path.home() / '.local' / 'bin' / 'claude',
+    ]
+    for path in possible_paths:
+        if path.exists():
+            return str(path)
     # Fall back to PATH lookup
     return shutil.which('claude') or 'claude'

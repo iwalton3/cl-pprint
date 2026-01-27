@@ -66,7 +66,7 @@ Settings are loaded from `config.json` (copy from `config.example.json`). Key se
 
 The `config.py` module provides `get(key)` for dot-notation access and `get_path(key)` for path expansion.
 
-**Note**: Default paths use Unix conventions (`~/.claude/`). See BUG_REPORTS.md for Windows compatibility.
+**Note**: Claude Code uses `~/.claude/` on all platforms including Windows.
 
 ## Architecture
 
@@ -187,11 +187,12 @@ Specific tool options override general ones (e.g., `show_explore_full=True` show
 - **Renumbering noise**: Filter diff lines that are just list item renumbering (strip numbers, compare text)
 
 ### Cross-Platform
-- **Windows paths differ**: Claude Code uses `%APPDATA%\Claude` on Windows, not `~/.claude`
-- **Path expansion**: Use `os.path.expanduser()` and `os.path.expandvars()` together
+- **Claude data directory**: `~/.claude/` on all platforms (Windows, Linux, macOS)
+- **Path slug conversion**: Claude converts paths to directory names by replacing both `/` and `\` with `-`, and `.` with `-`, plus removing `:` from drive letters (e.g., `C:\Projects\JFD.API` → `-C-Projects-JFD-API`)
+- **Path expansion**: Use `Path.expanduser()` for `~` expansion (works on Windows too)
 
 ### Claude Code Conventions
-- **Directory naming**: Both `/` and `.` characters are converted to `-` in project directory names (e.g., `/working/JFD.API` → `-working-JFD-API`)
+- **Directory naming**: Path separators (`/` and `\`), dots (`.`), and colons (`:`) are converted to `-` in project directory names (e.g., `/working/JFD.API` → `-working-JFD-API`, `C:\Projects\JFD.API` → `-C-Projects-JFD-API`)
 - **Subdirectory projects**: Running `claude code` from subdirectories creates separate project directories that won't match parent directory searches
 - **Related directories**: Use `--related` flag for moved projects - historical paths don't need to exist on disk
 

@@ -264,7 +264,13 @@ def find_matching_project_dirs(project_path: Path, claude_projects: Path) -> lis
     Claude Code converts path separators AND dots to dashes in directory names.
     """
     # Claude Code converts both '/' and '.' to '-' in directory names
-    path_slug = str(project_path.resolve()).replace('/', '-').replace('.', '-').lstrip('-')
+    # On Windows, also need to convert backslashes and handle drive letters (C: -> C)
+    resolved_path = str(project_path.resolve())
+    # Normalize path separators (Windows uses backslashes)
+    path_slug = resolved_path.replace('\\', '/').replace('/', '-').replace('.', '-')
+    # Remove drive colon on Windows (e.g., C: -> C)
+    path_slug = path_slug.replace(':', '')
+    path_slug = path_slug.lstrip('-')
 
     matches = []
 
@@ -284,7 +290,12 @@ def find_matching_project_dirs(project_path: Path, claude_projects: Path) -> lis
     # If no direct matches, try partial match using path segments
     if not matches:
         # Convert dots to dashes in path parts to match Claude's conversion
-        project_parts = [p.lower().replace('.', '-') for p in project_path.resolve().parts[-3:] if p and p != '/']
+        # Filter out root elements: '/' on Unix, 'C:\' or 'C:' on Windows
+        project_parts = [
+            p.lower().replace('.', '-')
+            for p in project_path.resolve().parts[-3:]
+            if p and p not in ('/', '\\') and not (len(p) <= 3 and p.endswith(':'))
+        ]
         for dir_path in claude_projects.iterdir():
             if dir_path.is_dir():
                 dir_parts = [p.lower() for p in dir_path.name.lstrip('-').split('-')]
